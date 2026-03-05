@@ -1,0 +1,93 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Argos Mesh",
+  "projectDescription": "A distributed microservices system with DDoS protection for e-commerce applications",
+  "theme": "aspen",
+  "primaryColor": "#E74C3C",
+  "lightColor": "#EC7063",
+  "darkColor": "#C0392B",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment",
+              "configuration/rabbitmq",
+              "configuration/redis",
+              "configuration/database"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Services",
+        "groups": [
+          {
+            "group": "Microservices",
+            "pages": [
+              "services/orders",
+              "services/sentinel",
+              "services/notify"
+            ]
+          },
+          {
+            "group": "API Reference",
+            "pages": [
+              "api/products",
+              "api/events"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Operations",
+        "groups": [
+          {
+            "group": "Deployment",
+            "pages": [
+              "operations/docker-compose",
+              "operations/local-setup"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/rate-limiting",
+              "security/ip-blocking",
+              "security/ddos-protection"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Real-time DDoS attack detection and prevention",
+    "Rate limiting with Redis-based IP tracking",
+    "Event-driven architecture with RabbitMQ",
+    "Java 21 Virtual Threads for high-performance processing",
+    "Automated IP blacklisting for suspicious traffic",
+    "Microservices architecture with Docker containerization"
+  ],
+  "publicApiSurface": [
+    "GET /orders/products/{id}",
+    "POST /orders/products",
+    "PUT /orders/products/{id}",
+    "DELETE /orders/products/{id}",
+    "POST /orders/products/{id}/sell",
+    "ProductSoldInternalEvent (RabbitMQ)",
+    "ProductCreatedInternalEvent (RabbitMQ)",
+    "AlertInternalEvent (RabbitMQ)"
+  ]
+}
