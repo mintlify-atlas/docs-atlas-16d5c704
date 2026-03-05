@@ -1,0 +1,423 @@
+---
+title: 'RabbitMQ Configuration'
+description: 'Configure message queues, exchanges, and bindings for event-driven communication'
+icon: 'message-lines'
+---
+
+## Overview
+
+Argos Mesh uses RabbitMQ as the message broker for asynchronous communication between microservices. The system implements a topic-based exchange pattern for flexible routing of events.
+
+## Connection Configuration
+
+### Basic Connection Settings
+
+<ParamField path="spring.rabbitmq.host" type="string" required>
+  RabbitMQ server hostname
+  
+  **Default:** `message_broker` (Docker service name)
+  
+  **Production:** Use FQDN or IP address
+</ParamField>
+
+<ParamField path="spring.rabbitmq.port" type="number" required>
+  AMQP protocol port
+  
+  **Default:** `5672`
+</ParamField>
+
+<ParamField path="spring.rabbitmq.username" type="string" required>
+  Authentication username
+  
+  **Default:** `admin`
+</ParamField>
+
+<ParamField path="spring.rabbitmq.password" type="string" required>
+  Authentication password
+  
+  **Default:** `admin123`
+  
+  <Warning>
+    Change default credentials in production!
+  </Warning>
+</ParamField>
+
+<ParamField path="spring.rabbitmq.listener.simple.prefetch" type="number">
+  Number of messages to prefetch per consumer
+  
+  **Default:** `1`
+  
+  **Purpose:** Fair dispatch - each consumer processes one message at a time
+</ParamField>
+
+### Application Properties Example
+
+<CodeGroup>
+```properties orders/application.properties
+spring.rabbitmq.host=message_broker
+spring.rabbitmq.port=5672
+spring.rabbitmq.username=admin
+spring.rabbitmq.password=admin123
+spring.rabbitmq.listener.simple.prefetch=1
+```
+
+```properties sentinel/application.properties
+spring.rabbitmq.host=message_broker
+spring.rabbitmq.port=5672
+spring.rabbitmq.username=admin
+spring.rabbitmq.password=admin123
+spring.rabbitmq.listener.simple.prefetch=1
+```
+</CodeGroup>
+
+## Queue and Exchange Architecture
+
+### Orders Service Queues
+
+The Orders service publishes events related to sales and product management.
+
+<ParamField path="argos.sales.queue" type="Queue">
+  **Queue Name:** `argos.sales.queue`
+  
+  **Durability:** `true` (survives broker restart)
+  
+  **Purpose:** Receives sales transaction events
+  
+  **Exchange:** `shop.exchange`
+  
+  **Routing Key:** `shop.event.sold`
+</ParamField>
+
+<ParamField path="argos.products.mgmt.queue" type="Queue">
+  **Queue Name:** `argos.products.mgmt.queue`
+  
+  **Durability:** `true`
+  
+  **Purpose:** Receives product lifecycle events (created, updated, deleted)
+  
+  **Exchange:** `shop.exchange`
+  
+  **Routing Key:** `shop.event.product.#` (wildcard)
+</ParamField>
+
+#### Configuration Code
+
+```java orders/config/RabbitMQConfig.java
+@Configuration
+public class RabbitMQConfig {
+
+    public static final String QUEUE_SALE = "argos.sales.queue";
+    public static final String QUEUE_PRODUCTS = "argos.products.mgmt.queue";
+    
+    public static final String EXCHANGE_NAME = "shop.exchange";
+    public static final String RK_SALES = "shop.event.sold";
+    public static final String RK_PRODUCTS = "shop.event.product.#";
+
+    @Bean
+    public Queue salesQueue() {
+        return new Queue(QUEUE_SALE, true);
+    }
+
+    @Bean
+    public Queue productsQueue() {
+        return new Queue(QUEUE_PRODUCTS, true);
+    }
+
+    @Bean
+    public TopicExchange exchange() {
+        return new TopicExchange(EXCHANGE_NAME);
+    }
+
+    @Bean
+    public Binding bindingSales(Queue salesQueue, TopicExchange exchange) {
+        return BindingBuilder.bind(salesQueue).to(exchange).with(RK_SALES);
+    }
+
+    @Bean
+    public Binding bindingProducts(Queue productsQueue, TopicExchange exchange) {
+        return BindingBuilder.bind(productsQueue).to(exchange).with(RK_PRODUCTS);
+    }
+}
+```
+
+### Sentinel Service Queues
+
+The Sentinel service consumes events for monitoring and alert generation.
+
+<ParamField path="argos.sales.queue" type="Queue">
+  **Queue Name:** `argos.sales.queue`
+  
+  **Durability:** `true`
+  
+  **Purpose:** Monitors sales for rate limiting analysis
+  
+  **Exchange:** `shop.exchange`
+  
+  **Routing Key:** `shop.event.sold`
+</ParamField>
+
+<ParamField path="argos.alert.queue" type="Queue">
+  **Queue Name:** `argos.alert.queue`
+  
+  **Durability:** `true`
+  
+  **Purpose:** Publishes security alerts when suspicious activity is detected
+  
+  **Exchange:** `alert.exchange`
+  
+  **Routing Key:** `argos.alert.#` (wildcard)
+</ParamField>
+
+#### Configuration Code
+
+```java sentinel/config/RabbitMQConfig.java
+@Configuration
+public class RabbitMQConfig {
+    public static final String QUEUE_ALERT = "argos.alert.queue";
+    public static final String ALERT_EXCHANGE = "alert.exchange";
+    public static final String RK_ALERT = "argos.alert.#";
+
+    public static final String QUEUE_SALE = "argos.sales.queue";    
+    public static final String EXCHANGE_SOLD = "shop.exchange";
+    public static final String RK_SALES = "shop.event.sold";
+
+    // Notifications queue
+    @Bean
+    public Queue alertQueue() {
+        return new Queue(QUEUE_ALERT, true);
+    }
+
+    @Bean
+    public TopicExchange exchange() {
+        return new TopicExchange(ALERT_EXCHANGE);
+    }
+
+    @Bean
+    public Binding binding(Queue alertQueue, TopicExchange exchange) {
+        return BindingBuilder.bind(alertQueue).to(exchange).with(RK_ALERT);
+    }
+
+    // Sales queue
+    @Bean
+    public Queue salesQueue() {
+        return new Queue(QUEUE_SALE, true);
+    }
+
+    @Bean
+    public TopicExchange exchangeSold() {
+        return new TopicExchange(EXCHANGE_SOLD);
+    }
+
+    @Bean
+    public Binding bindingSales(Queue salesQueue, TopicExchange exchange) {
+        return BindingBuilder.bind(salesQueue).to(exchange).with(RK_SALES);
+    }
+}
+```
+
+### Notify Service Queues
+
+The Notify service consumes alert events for notification delivery.
+
+<ParamField path="argos.alert.queue" type="Queue">
+  **Queue Name:** `argos.alert.queue`
+  
+  **Durability:** `true`
+  
+  **Purpose:** Consumes alerts and sends notifications
+  
+  **Exchange:** `alert.exchange`
+  
+  **Routing Key:** `argos.alert.#` (wildcard)
+</ParamField>
+
+#### Configuration Code
+
+```java notify/config/RabbitMQConfig.java
+@Configuration
+public class RabbitMQConfig {
+
+    public static final String QUEUE_ALERT = "argos.alert.queue";
+    public static final String ALERT_EXCHANGE = "alert.exchange";
+    public static final String RK_ALERT = "argos.alert.#";
+
+    @Bean
+    public Queue alertQueue() {
+        return new Queue(QUEUE_ALERT, true);
+    }
+
+    @Bean
+    public TopicExchange exchange() {
+        return new TopicExchange(ALERT_EXCHANGE);
+    }
+
+    @Bean
+    public Binding binding(Queue alertQueue, TopicExchange exchange) {
+        return BindingBuilder.bind(alertQueue).to(exchange).with(RK_ALERT);
+    }
+}
+```
+
+## Message Serialization
+
+All services use Jackson JSON for message serialization with custom configuration:
+
+```java RabbitMQConfig.java
+@Bean
+public ObjectMapper objectMapper() {
+    ObjectMapper mapper = new ObjectMapper();
+    mapper.registerModule(new JavaTimeModule());
+    mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+    return mapper;
+}
+
+@Bean
+public MessageConverter jsonMessageConverter(ObjectMapper objectMapper) {
+    return new Jackson2JsonMessageConverter(objectMapper);
+}
+```
+
+<Note>
+  The `JavaTimeModule` enables proper serialization of Java 8+ date/time types (LocalDateTime, Instant, etc.) without timestamps.
+</Note>
+
+## Routing Patterns
+
+### Topic Exchange Routing
+
+Argos Mesh uses **Topic Exchanges** for flexible message routing:
+
+| Routing Key | Pattern | Queue | Purpose |
+|-------------|---------|-------|----------|
+| `shop.event.sold` | Exact match | `argos.sales.queue` | Sales transactions |
+| `shop.event.product.#` | Wildcard | `argos.products.mgmt.queue` | Product events |
+| `argos.alert.#` | Wildcard | `argos.alert.queue` | Security alerts |
+
+<AccordionGroup>
+  <Accordion title="Wildcard Routing Explained">
+    **Hash (#) Wildcard:** Matches zero or more words
+    
+    Examples:
+    - `shop.event.product.#` matches:
+      - `shop.event.product.created`
+      - `shop.event.product.updated`
+      - `shop.event.product.deleted`
+    
+    **Star (*) Wildcard:** Matches exactly one word
+    
+    Example:
+    - `shop.event.*` matches:
+      - `shop.event.sold`
+      - `shop.event.created`
+    - But NOT `shop.event.product.created`
+  </Accordion>
+
+  <Accordion title="Queue Durability">
+    All queues are marked as durable (`true`), which means:
+    
+    - Queues survive RabbitMQ broker restarts
+    - Messages are not lost on broker failure (when marked as persistent)
+    - Suitable for production environments
+    
+    Non-durable queues are deleted when the broker restarts.
+  </Accordion>
+
+  <Accordion title="Prefetch Count">
+    Setting `prefetch=1` ensures fair dispatch:
+    
+    - RabbitMQ won't give more than one message to a worker at a time
+    - Prevents fast workers from being idle while slow workers are overloaded
+    - Messages are distributed evenly across consumers
+    
+    This is critical for the Sentinel service which performs intensive analysis.
+  </Accordion>
+</AccordionGroup>
+
+## Docker Configuration
+
+RabbitMQ runs as a Docker container with the management plugin enabled:
+
+```yaml docker-compose.yml
+rabbitmq:
+  image: rabbitmq:3-management-alpine
+  container_name: message_broker
+  ports:
+    - "5672:5672"   # AMQP protocol
+    - "15672:15672" # Management UI
+  environment:
+    - RABBITMQ_DEFAULT_USER=admin
+    - RABBITMQ_DEFAULT_PASS=admin123
+  healthcheck:
+    test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+  networks:
+    - argos-network
+```
+
+### Management UI
+
+Access the RabbitMQ Management UI at `http://localhost:15672`
+
+**Default Credentials:**
+- Username: `admin`
+- Password: `admin123`
+
+<Warning>
+  Change these credentials for production deployments!
+</Warning>
+
+## Monitoring and Management
+
+<CardGroup cols={2}>
+  <Card title="View Queues" icon="layer-group">
+    Monitor queue depth, consumer count, and message rates in the Management UI
+  </Card>
+  
+  <Card title="Check Bindings" icon="link">
+    Verify exchange-to-queue bindings and routing key patterns
+  </Card>
+  
+  <Card title="Message Tracing" icon="magnifying-glass">
+    Enable tracing to debug message routing issues
+  </Card>
+  
+  <Card title="Performance Metrics" icon="chart-line">
+    Track message publish/delivery rates and memory usage
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection Refused">
+    **Symptoms:** Services fail to start with connection errors
+    
+    **Solutions:**
+    - Verify RabbitMQ container is running: `docker ps`
+    - Check health status: `docker logs message_broker`
+    - Ensure port 5672 is accessible
+    - Verify network connectivity between containers
+  </Accordion>
+
+  <Accordion title="Messages Not Being Consumed">
+    **Symptoms:** Messages accumulate in queues
+    
+    **Solutions:**
+    - Check consumer count in Management UI
+    - Verify listeners are registered: check application logs
+    - Ensure `@RabbitListener` annotations are present
+    - Check for exceptions in consumer methods
+  </Accordion>
+
+  <Accordion title="Routing Issues">
+    **Symptoms:** Messages sent but not received
+    
+    **Solutions:**
+    - Verify routing key matches binding pattern
+    - Check exchange type (Topic vs Direct)
+    - Use Management UI to trace message flow
+    - Verify queue bindings are correct
+  </Accordion>
+</AccordionGroup>

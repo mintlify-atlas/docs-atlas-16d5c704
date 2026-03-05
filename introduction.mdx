@@ -1,0 +1,100 @@
+---
+title: Introduction
+description: Argos Mesh is a distributed microservices system that protects e-commerce applications from DDoS attacks using real-time traffic analysis and automated IP blacklisting.
+---
+
+# Welcome to Argos Mesh
+
+Argos Mesh is a production-ready distributed system designed to detect and prevent DDoS attacks against e-commerce applications. Built with Java 21 and leveraging Virtual Threads for high-performance concurrent processing, Argos Mesh provides real-time traffic analysis and automated threat mitigation.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Real-time DDoS Detection" icon="shield-halved">
+    Analyzes traffic patterns in real-time to identify and block suspicious IP addresses before they can impact your service
+  </Card>
+  <Card title="Rate Limiting" icon="gauge-high">
+    Redis-based rate limiting tracks requests per IP with configurable thresholds and time windows
+  </Card>
+  <Card title="Event-Driven Architecture" icon="diagram-project">
+    RabbitMQ powers asynchronous communication between microservices for scalable, decoupled components
+  </Card>
+  <Card title="High Performance" icon="bolt">
+    Java 21 Virtual Threads enable thousands of concurrent connections with minimal resource overhead
+  </Card>
+  <Card title="Automated IP Blocking" icon="ban">
+    Suspicious IPs are automatically blacklisted and prevented from accessing your services
+  </Card>
+  <Card title="Container-Ready" icon="docker">
+    Fully containerized with Docker Compose for easy deployment and orchestration
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+Argos Mesh consists of three core microservices:
+
+- **Orders Service** - Manages product catalog and order processing for your e-commerce shop
+- **Sentinel Service** - Monitors traffic patterns and detects DDoS attacks using rate limiting algorithms
+- **Notify Service** - Handles alerts and notifications when suspicious activity is detected
+
+These services communicate through RabbitMQ message queues and share state via Redis for distributed rate limiting and IP blacklisting.
+
+## How It Works
+
+<Steps>
+  <Step title="Client makes a request">
+    A client sends a request to the Orders Service (e.g., purchasing a product)
+  </Step>
+  <Step title="Event is published">
+    The Orders Service publishes a `ProductSoldInternalEvent` to RabbitMQ containing the client IP address
+  </Step>
+  <Step title="Sentinel analyzes traffic">
+    The Sentinel Service consumes the event and analyzes request frequency from that IP using Redis counters
+  </Step>
+  <Step title="Threat detection">
+    If the IP exceeds 50 requests in 10 seconds, it's flagged as suspicious and added to the blacklist
+  </Step>
+  <Step title="Alerts are sent">
+    An `AlertInternalEvent` is published to RabbitMQ, triggering the Notify Service to send alerts
+  </Step>
+</Steps>
+
+## Technology Stack
+
+- **Java 21** with Virtual Threads for concurrent processing
+- **Spring Boot 4.0.3** for microservices framework
+- **PostgreSQL** for persistent data storage
+- **Redis** for rate limiting and IP blacklisting
+- **RabbitMQ** for event-driven messaging
+- **Docker** for containerization
+
+## Quick Links
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get Argos Mesh running locally in under 5 minutes
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Understand how the microservices work together
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/products">
+    Explore the REST API endpoints
+  </Card>
+  <Card title="Security Features" icon="lock" href="/security/ddos-protection">
+    Learn about DDoS protection mechanisms
+  </Card>
+</CardGroup>
+
+## Use Cases
+
+Argos Mesh is ideal for:
+
+- **E-commerce platforms** that need protection from automated bots and scrapers
+- **API services** requiring rate limiting and abuse prevention
+- **Public-facing applications** vulnerable to volumetric DDoS attacks
+- **Multi-tenant systems** needing per-client rate limiting
+
+## License
+
+Argos Mesh is open source under the [MIT License](https://github.com/cgalean0/argos-mesh/blob/main/LICENSE).

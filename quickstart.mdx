@@ -1,80 +1,362 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: 'Quickstart'
+description: 'Get Argos Mesh up and running locally in under 5 minutes'
+icon: 'rocket'
 ---
 
-## Get started in three steps
+Argos Mesh is a distributed system designed to prevent DDoS attacks on e-commerce applications using intelligent traffic analysis and IP blacklisting. This guide will walk you through setting up the complete system locally using Docker Compose.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+Before you begin, ensure you have the following installed on your system:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Docker" icon="docker" iconType="duotone">
+    Version 20.10 or higher
+  </Card>
+  <Card title="Docker Compose" icon="layer-group" iconType="duotone">
+    Version 2.0 or higher
+  </Card>
+  <Card title="Git" icon="git-alt" iconType="duotone">
+    For cloning the repository
+  </Card>
+  <Card title="Java 21" icon="coffee" iconType="duotone">
+    Optional, for local development
+  </Card>
 </CardGroup>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  Argos Mesh uses Java 21 with Virtual Threads in the Sentinel service for optimal performance when handling high-traffic scenarios.
 </Note>
+
+## Setup Steps
+
+<Steps>
+  <Step title="Clone the Repository">
+    Clone the Argos Mesh repository to your local machine:
+
+    ```bash
+    git clone https://github.com/yourusername/argos-mesh.git
+    cd argos-mesh
+    ```
+  </Step>
+
+  <Step title="Navigate to Infrastructure Directory">
+    The Docker Compose configuration is located in the `infra` directory:
+
+    ```bash
+    cd infra
+    ```
+  </Step>
+
+  <Step title="Start the Services">
+    Launch all microservices and dependencies using Docker Compose:
+
+    ```bash
+    docker-compose up -d
+    ```
+
+    This command will build and start all services in detached mode. The initial build may take 5-10 minutes as Maven downloads dependencies and compiles the Java applications.
+
+    <Note>
+      The `-d` flag runs containers in the background. Omit it if you want to see real-time logs.
+    </Note>
+  </Step>
+
+  <Step title="Verify Services are Running">
+    Check that all containers are healthy:
+
+    ```bash
+    docker-compose ps
+    ```
+
+    You should see output similar to this:
+
+    ```bash
+    NAME                IMAGE                              STATUS
+    shop_db             postgres:15-alpine                 Up (healthy)
+    shop_app            infra-app                          Up
+    sentinel_app        infra-sentinel                     Up
+    notify_app          infra-notify                       Up
+    message_broker      rabbitmq:3-management-alpine       Up (healthy)
+    black_list          redis:7.2-alpine                   Up (healthy)
+    ```
+  </Step>
+
+  <Step title="Access the Application">
+    Once all services are running, you can access:
+
+    <CardGroup cols={2}>
+      <Card title="Orders API" icon="cart-shopping">
+        **URL:** http://localhost:8080
+        
+        Main shop API for product management
+      </Card>
+      <Card title="RabbitMQ Management" icon="rabbit">
+        **URL:** http://localhost:15672
+        
+        Username: `admin` / Password: `admin123`
+      </Card>
+      <Card title="PostgreSQL" icon="database">
+        **Port:** 5432
+        
+        Database: `shop_db`
+      </Card>
+      <Card title="Redis" icon="cubes">
+        **Port:** 6379
+        
+        IP blacklist storage
+      </Card>
+    </CardGroup>
+  </Step>
+</Steps>
+
+## Test the System
+
+Now that Argos Mesh is running, let's test the DDoS prevention capabilities.
+
+### Create a Product
+
+First, create a test product in the shop:
+
+```bash
+curl -X POST http://localhost:8080/orders/products \
+  -H "Content-Type: application/json" \
+  -d '{
+    "productName": "Laptop",
+    "productPrice": 999.99,
+    "productStock": 100
+  }'
+```
+
+**Expected Response:**
+
+```json
+{
+  "productID": 1,
+  "productName": "Laptop",
+  "productPrice": 999.99,
+  "productStock": 100
+}
+```
+
+### Simulate Normal Traffic
+
+Make a legitimate purchase request:
+
+```bash
+curl -X POST http://localhost:8080/orders/products/1/sell \
+  -H "Content-Type: application/json" \
+  -d '{
+    "quantity": 1
+  }'
+```
+
+**Expected Response:**
+
+```
+HTTP/1.1 202 Accepted
+```
+
+Check the sentinel logs to see normal traffic processing:
+
+```bash
+docker logs sentinel_app
+```
+
+**Output:**
+
+```
+[ Sentinel🛡️ ] Normal traffic of the IP: 172.18.0.1
+```
+
+### Simulate DDoS Attack
+
+Now, let's simulate a DDoS attack by sending more than 50 requests within 10 seconds from the same IP:
+
+```bash
+for i in {1..60}; do
+  curl -X POST http://localhost:8080/orders/products/1/sell \
+    -H "Content-Type: application/json" \
+    -d '{"quantity": 1}' &
+done
+wait
+```
+
+<Warning>
+  After 50 requests in 10 seconds, the Sentinel service will detect suspicious activity, ban the IP for 10 minutes, and trigger an alert notification.
+</Warning>
+
+Check the notify service logs to see the security alert:
+
+```bash
+docker logs notify_app
+```
+
+**Output:**
+
+```
+[ Alert ] - 2026-03-05T13:45:23.123
+The IP: 172.18.0.1
+Is suspicious of try an: Suspicious behavior
+This is: CRITICAL
+```
+
+### Verify IP Blacklist
+
+Check that the IP was added to the Redis blacklist:
+
+```bash
+docker exec black_list redis-cli KEYS "blacklist:ip:*"
+```
+
+**Output:**
+
+```
+1) "blacklist:ip:172.18.0.1"
+```
+
+## Environment Configuration
+
+Argos Mesh uses the following environment variables for configuration:
+
+### Database Configuration
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://db:5432/shop_db` | PostgreSQL connection URL |
+| `SPRING_DATASOURCE_USERNAME` | `user_shop` | Database username |
+| `SPRING_DATASOURCE_PASSWORD` | `secretPassword` | Database password (change in production) |
+
+### RabbitMQ Configuration
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `SPRING_RABBITMQ_HOST` | `message_broker` | RabbitMQ hostname |
+| `SPRING_RABBITMQ_PORT` | `5672` | AMQP port |
+| `SPRING_RABBITMQ_USERNAME` | `admin` | RabbitMQ username |
+| `SPRING_RABBITMQ_PASSWORD` | `admin123` | RabbitMQ password (change in production) |
+
+### Redis Configuration
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `SPRING_DATA_REDIS_HOST` | `redis_db` | Redis hostname |
+| `SPRING_DATA_REDIS_PORT` | `6379` | Redis port |
+
+### Sentinel Configuration
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `SPRING_THREADS_VIRTUAL_ENABLED` | `true` | Enable Java 21 Virtual Threads |
+
+<Warning>
+  **Security Notice:** The default passwords are for development only. Always use strong, unique passwords in production environments.
+</Warning>
+
+## Port Mappings
+
+The following ports are exposed to the host machine:
+
+- **8080** → Shop API (Orders service)
+- **5432** → PostgreSQL database
+- **5672** → RabbitMQ AMQP
+- **15672** → RabbitMQ Management UI
+- **6379** → Redis
+
+## Health Checks
+
+All services implement health checks to ensure proper startup order:
+
+<CodeGroup>
+
+```yaml PostgreSQL
+healthcheck:
+  test: ["CMD-SHELL", "pg_isready -U user_shop -d shop_db"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+```
+
+```yaml RabbitMQ
+healthcheck:
+  test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+  interval: 10s
+  timeout: 5s
+  retries: 3
+```
+
+```yaml Redis
+healthcheck:
+  test: ["CMD", "redis-cli", "ping"]
+  interval: 5s
+  timeout: 3s
+  retries: 5
+```
+
+</CodeGroup>
+
+## Troubleshooting
+
+### Services Won't Start
+
+If services fail to start, check the logs:
+
+```bash
+docker-compose logs -f
+```
+
+Common issues:
+- **Port conflicts:** Ensure ports 5432, 5672, 6379, 8080, and 15672 are not in use
+- **Memory:** Ensure Docker has at least 4GB of RAM allocated
+- **Build errors:** Run `docker-compose build --no-cache` to rebuild from scratch
+
+### Database Connection Errors
+
+If the shop app can't connect to the database, ensure the health check passed:
+
+```bash
+docker-compose ps db
+```
+
+The status should show `Up (healthy)`. If not, check PostgreSQL logs:
+
+```bash
+docker logs shop_db
+```
+
+### RabbitMQ Connection Issues
+
+Verify RabbitMQ is accessible:
+
+```bash
+curl -u admin:admin123 http://localhost:15672/api/overview
+```
+
+### Reset the Environment
+
+To completely reset the environment and start fresh:
+
+```bash
+docker-compose down -v
+docker-compose up -d
+```
+
+The `-v` flag removes all volumes, including database data and Redis cache.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture Overview" icon="diagram-project" href="/architecture">
+    Learn how the microservices work together
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/products">
+    Explore the REST API endpoints
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/environment">
+    Customize your deployment
+  </Card>
+  <Card title="Security" icon="shield" href="/security/ddos-protection">
+    Learn about DDoS protection
+  </Card>
+</CardGroup>

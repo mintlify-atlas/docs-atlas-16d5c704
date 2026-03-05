@@ -1,0 +1,408 @@
+---
+title: 'Products API'
+description: 'REST API endpoints for managing products in Argos Mesh'
+---
+
+The Products API provides endpoints for creating, reading, updating, and deleting products, as well as processing product sales transactions.
+
+## Base URL
+
+All product endpoints are prefixed with `/orders/products`
+
+---
+
+## Get Product by ID
+
+Retrieve detailed information about a specific product.
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:8080/orders/products/1 \
+  -H "Content-Type: application/json"
+```
+
+```java Java
+ResponseEntity<ProductResponse> response = restTemplate.getForEntity(
+    "http://localhost:8080/orders/products/1",
+    ProductResponse.class
+);
+```
+</CodeGroup>
+
+### Path Parameters
+
+<ParamField path="id" type="Long" required>
+  The unique identifier of the product
+</ParamField>
+
+### Response
+
+<ResponseField name="productID" type="Long" required>
+  Unique identifier of the product
+</ResponseField>
+
+<ResponseField name="productName" type="String" required>
+  Name of the product
+</ResponseField>
+
+<ResponseField name="productPrice" type="BigDecimal" required>
+  Price of the product in decimal format
+</ResponseField>
+
+<ResponseField name="productStock" type="Integer" required>
+  Current stock quantity available
+</ResponseField>
+
+### Response Example
+
+```json
+{
+  "productID": 1,
+  "productName": "Laptop",
+  "productPrice": 999.99,
+  "productStock": 50
+}
+```
+
+---
+
+## Create Product
+
+Create a new product in the system.
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8080/orders/products \
+  -H "Content-Type: application/json" \
+  -d '{
+    "productName": "Laptop",
+    "productPrice": 999.99,
+    "productStock": 50
+  }'
+```
+
+```java Java
+ProductRequest request = new ProductRequest(
+    "Laptop",
+    new BigDecimal("999.99"),
+    50
+);
+
+ResponseEntity<ProductResponse> response = restTemplate.postForEntity(
+    "http://localhost:8080/orders/products",
+    request,
+    ProductResponse.class
+);
+```
+</CodeGroup>
+
+### Request Body
+
+<ParamField body="productName" type="String" required>
+  Name of the product. Must not be null.
+  
+  **Validation**: `@NotNull`
+</ParamField>
+
+<ParamField body="productPrice" type="BigDecimal" required>
+  Price of the product. Must be a positive number.
+  
+  **Validation**: `@Positive`
+</ParamField>
+
+<ParamField body="productStock" type="Integer" required>
+  Initial stock quantity. Must be zero or positive.
+  
+  **Validation**: `@PositiveOrZero`
+</ParamField>
+
+### Request Example
+
+```json
+{
+  "productName": "Laptop",
+  "productPrice": 999.99,
+  "productStock": 50
+}
+```
+
+### Response
+
+Returns a `ProductResponse` object with the created product details including the generated `productID`.
+
+<ResponseField name="productID" type="Long" required>
+  Auto-generated unique identifier
+</ResponseField>
+
+<ResponseField name="productName" type="String" required>
+  Name of the product
+</ResponseField>
+
+<ResponseField name="productPrice" type="BigDecimal" required>
+  Price of the product
+</ResponseField>
+
+<ResponseField name="productStock" type="Integer" required>
+  Current stock quantity
+</ResponseField>
+
+### Response Example
+
+```json
+{
+  "productID": 1,
+  "productName": "Laptop",
+  "productPrice": 999.99,
+  "productStock": 50
+}
+```
+
+<Note>
+  When a product is successfully created, a `ProductCreatedInternalEvent` is published to the RabbitMQ exchange for downstream processing.
+</Note>
+
+---
+
+## Update Product
+
+Update an existing product's information.
+
+<CodeGroup>
+```bash cURL
+curl -X PUT http://localhost:8080/orders/products/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "productName": "Gaming Laptop",
+    "productPrice": 1299.99,
+    "productStock": 30
+  }'
+```
+
+```java Java
+ProductRequest request = new ProductRequest(
+    "Gaming Laptop",
+    new BigDecimal("1299.99"),
+    30
+);
+
+HttpEntity<ProductRequest> entity = new HttpEntity<>(request);
+ResponseEntity<ProductResponse> response = restTemplate.exchange(
+    "http://localhost:8080/orders/products/1",
+    HttpMethod.PUT,
+    entity,
+    ProductResponse.class
+);
+```
+</CodeGroup>
+
+### Path Parameters
+
+<ParamField path="id" type="Long" required>
+  The unique identifier of the product to update
+</ParamField>
+
+### Request Body
+
+<ParamField body="productName" type="String" required>
+  Updated product name
+  
+  **Validation**: `@NotNull`
+</ParamField>
+
+<ParamField body="productPrice" type="BigDecimal" required>
+  Updated product price. Must be positive.
+  
+  **Validation**: `@Positive`
+</ParamField>
+
+<ParamField body="productStock" type="Integer" required>
+  Updated stock quantity. Must be zero or positive.
+  
+  **Validation**: `@PositiveOrZero`
+</ParamField>
+
+### Response
+
+Returns the updated `ProductResponse` object.
+
+```json
+{
+  "productID": 1,
+  "productName": "Gaming Laptop",
+  "productPrice": 1299.99,
+  "productStock": 30
+}
+```
+
+---
+
+## Delete Product
+
+Delete a product from the system.
+
+<CodeGroup>
+```bash cURL
+curl -X DELETE http://localhost:8080/orders/products/1 \
+  -H "Content-Type: application/json"
+```
+
+```java Java
+restTemplate.delete("http://localhost:8080/orders/products/1");
+```
+</CodeGroup>
+
+### Path Parameters
+
+<ParamField path="id" type="Long" required>
+  The unique identifier of the product to delete
+</ParamField>
+
+### Response
+
+Returns HTTP 204 No Content on successful deletion.
+
+<Warning>
+  This operation permanently deletes the product. This action cannot be undone.
+</Warning>
+
+---
+
+## Sell Product
+
+Process a product sale transaction. This endpoint handles inventory deduction and publishes sale events for downstream processing.
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8080/orders/products/1/sell \
+  -H "Content-Type: application/json" \
+  -d '{
+    "quantity": 5
+  }'
+```
+
+```java Java
+BuyRequest buyRequest = new BuyRequest(5);
+
+ResponseEntity<Void> response = restTemplate.postForEntity(
+    "http://localhost:8080/orders/products/1/sell",
+    buyRequest,
+    Void.class
+);
+```
+</CodeGroup>
+
+### Path Parameters
+
+<ParamField path="id" type="Long" required>
+  The unique identifier of the product to sell
+</ParamField>
+
+### Request Body
+
+<ParamField body="quantity" type="Integer" required>
+  The number of units to sell
+</ParamField>
+
+### Request Example
+
+```json
+{
+  "quantity": 5
+}
+```
+
+### Response
+
+Returns HTTP 202 Accepted, indicating the sale request has been received and is being processed asynchronously.
+
+<Info>
+  The endpoint automatically captures the client IP address from the HTTP request for fraud detection and monitoring purposes.
+</Info>
+
+### Event Flow
+
+When a sale is processed:
+
+1. The product stock is decremented by the requested quantity
+2. A `ProductSoldInternalEvent` is published to RabbitMQ
+3. The Sentinel service consumes this event for fraud detection
+4. If suspicious activity is detected, an `AlertInternalEvent` is generated
+5. The Notify service receives alerts and sends notifications
+
+<Expandable title="ProductSoldInternalEvent Schema">
+  This event is published to the RabbitMQ exchange when a sale occurs:
+
+  ```java
+  public record ProductSoldInternalEvent(
+      Long productID,
+      Integer quantity,
+      String ipAddress,
+      LocalDateTime timeStamp
+  )
+  ```
+
+  **Queue**: `argos.sales.queue`  
+  **Exchange**: `shop.exchange`  
+  **Routing Key**: `shop.event.sold`
+</Expandable>
+
+---
+
+## Data Models
+
+### ProductRequest
+
+Used for creating and updating products.
+
+```java
+public record ProductRequest(
+    @NotNull String productName,
+    @Positive BigDecimal productPrice,
+    @PositiveOrZero Integer productStock
+)
+```
+
+### ProductResponse
+
+Returned when retrieving or modifying products.
+
+```java
+public record ProductResponse(
+    Long productID,
+    String productName,
+    BigDecimal productPrice,
+    Integer productStock
+)
+```
+
+### BuyRequest
+
+Used for product sale transactions.
+
+```java
+public record BuyRequest(Integer quantity)
+```
+
+---
+
+## Error Responses
+
+All endpoints may return the following error responses:
+
+| Status Code | Description |
+|-------------|-------------|
+| 400 | Bad Request - Invalid input data or validation failure |
+| 404 | Not Found - Product does not exist |
+| 500 | Internal Server Error - Unexpected server error |
+
+### Error Response Example
+
+```json
+{
+  "timestamp": "2026-03-05T10:30:00",
+  "status": 404,
+  "error": "Not Found",
+  "message": "Product not found with id: 1",
+  "path": "/orders/products/1"
+}
+```

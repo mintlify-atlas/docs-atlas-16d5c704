@@ -1,0 +1,367 @@
+---
+title: Orders Service
+description: Product catalog and order processing microservice
+icon: shopping-cart
+---
+
+## Overview
+
+The **Orders Service** is the core transactional service in Argos Mesh that manages the product catalog and processes customer orders. It handles CRUD operations for products, inventory management, and publishes events to RabbitMQ for downstream processing by other services.
+
+<Info>
+  The Orders Service runs on port 8080 and connects to PostgreSQL for data persistence and RabbitMQ for event-driven communication.
+</Info>
+
+## Architecture
+
+### Service Responsibilities
+
+<CardGroup cols={2}>
+  <Card title="Product Management" icon="box">
+    Create, read, update, and delete product records with validation
+  </Card>
+  <Card title="Order Processing" icon="receipt">
+    Handle product sales with stock validation and IP tracking
+  </Card>
+  <Card title="Event Publishing" icon="broadcast-tower">
+    Publish product and sales events to RabbitMQ after transaction commit
+  </Card>
+  <Card title="Security Integration" icon="shield">
+    Check Redis blacklist to block suspicious IP addresses
+  </Card>
+</CardGroup>
+
+## REST API Endpoints
+
+The `ProductController` exposes the following RESTful endpoints:
+
+### Product Operations
+
+<Tabs>
+  <Tab title="Get Product">
+    ```java
+    @GetMapping("/{id}")
+    public ResponseEntity<ProductResponse> getProductById(@PathVariable Long id)
+    ```
+    
+    **Endpoint:** `GET /orders/products/{id}`
+    
+    Retrieves a product by its ID.
+    
+    **Response:** `ProductResponse` with product details
+  </Tab>
+  
+  <Tab title="Create Product">
+    ```java
+    @PostMapping
+    public ResponseEntity<ProductResponse> createProduct(@RequestBody ProductRequest req)
+    ```
+    
+    **Endpoint:** `POST /orders/products`
+    
+    Creates a new product in the catalog.
+    
+    **Request Body:**
+    ```json
+    {
+      "productName": "Laptop",
+      "productPrice": 999.99,
+      "productStock": 50
+    }
+    ```
+    
+    **Response:** `ProductResponse` with created product details
+  </Tab>
+  
+  <Tab title="Update Product">
+    ```java
+    @PutMapping("/{id}")
+    public ResponseEntity<ProductResponse> updateProduct(
+        @PathVariable Long id, 
+        @RequestBody ProductRequest req)
+    ```
+    
+    **Endpoint:** `PUT /orders/products/{id}`
+    
+    Updates an existing product's information.
+  </Tab>
+  
+  <Tab title="Delete Product">
+    ```java
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deleteProductById(@PathVariable Long id)
+    ```
+    
+    **Endpoint:** `DELETE /orders/products/{id}`
+    
+    Removes a product from the catalog.
+  </Tab>
+  
+  <Tab title="Sell Product">
+    ```java
+    @PostMapping("/{id}/sell")
+    public ResponseEntity<Void> sellProduct(
+            @PathVariable Long id,
+            @RequestBody BuyRequest buyRequest,
+            HttpServletRequest request)
+    ```
+    
+    **Endpoint:** `POST /orders/products/{id}/sell`
+    
+    Processes a product sale, extracting the client IP for tracking.
+    
+    **Request Body:**
+    ```json
+    {
+      "quantity": 2
+    }
+    ```
+    
+    <Note>
+      This endpoint extracts the client IP address from the HTTP request and passes it to the service for DDoS detection.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Core Components
+
+### Product Entity
+
+The `Product` entity represents a product in the database:
+
+```java
+@Entity
+@Table(name = "products")
+public class Product {
+    @Id
+    @Column(name = "product_id")
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long productID;
+    
+    @NotNull
+    @NotBlank
+    @Column(name = "product_name", nullable = false)
+    private String productName;
+    
+    @NotNull
+    @Positive
+    @Column(name = "product_price", nullable = false)
+    private BigDecimal productPrice;
+    
+    @NotNull
+    @PositiveOrZero
+    @Column(name = "product_stock")
+    private Integer productStock;
+}
+```
+
+**Key Fields:**
+- `productID`: Auto-generated primary key
+- `productName`: Required, non-blank product name
+- `productPrice`: Must be positive decimal value
+- `productStock`: Non-negative integer for inventory count
+
+### Product Repository
+
+The repository includes a custom method for pessimistic locking during sales:
+
+```java
+public interface ProductRepository extends JpaRepository<Product, Long> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT p FROM Product p WHERE p.id = :id")
+    Optional<Product> findByIdForUpdate(Long id);
+}
+```
+
+<Info>
+  The `findByIdForUpdate` method uses pessimistic write locking to prevent race conditions during concurrent sales transactions.
+</Info>
+
+### Product Service Implementation
+
+The `ProductServiceImpl` class contains the core business logic:
+
+<Steps>
+  <Step title="IP Blacklist Check">
+    When processing a sale, the service first checks if the client IP is blacklisted in Redis:
+    
+    ```java
+    if (Boolean.TRUE.equals(redisTemplate.hasKey(BLACKLIST_PREFIX + ipAddress))) {
+        throw new SecurityException("Access Denied: Your IP is blocked for suspicious behavior");
+    }
+    ```
+  </Step>
+  
+  <Step title="Pessimistic Locking">
+    The service retrieves the product with a pessimistic write lock:
+    
+    ```java
+    Product product = productRepository.findByIdForUpdate(id)
+        .orElseThrow(() -> new ProductNotFoundException("Product not found"));
+    ```
+  </Step>
+  
+  <Step title="Stock Validation">
+    It validates that sufficient stock is available:
+    
+    ```java
+    if (product.getProductStock() < quantity) 
+        throw new NotSuficientStockException("The stock is not sufficient");
+    ```
+  </Step>
+  
+  <Step title="Stock Deduction">
+    The product stock is decremented:
+    
+    ```java
+    product.setProductStock(product.getProductStock() - quantity);
+    ```
+  </Step>
+  
+  <Step title="Event Publishing">
+    Finally, it publishes a `ProductSoldInternalEvent` for the Sentinel service:
+    
+    ```java
+    eventPublisher.publishEvent(
+        new ProductSoldInternalEvent(id, quantity, ipAddress, LocalDateTime.now())
+    );
+    ```
+  </Step>
+</Steps>
+
+## Event Publishing
+
+The `ProductMessagePublisher` handles asynchronous message publishing to RabbitMQ:
+
+```java
+@Component
+public class ProductMessagePublisher {
+    private final RabbitTemplate rabbitTemplate;
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void handleProductCreated(ProductCreatedInternalEvent event) {
+        rabbitTemplate.convertAndSend(
+                RabbitMQConfig.EXCHANGE_NAME,
+                RabbitMQConfig.RK_PRODUCTS,
+                event.response());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void handleProductSold(ProductSoldInternalEvent event) {
+        rabbitTemplate.convertAndSend(
+                RabbitMQConfig.EXCHANGE_NAME,
+                RabbitMQConfig.RK_SALES,
+                event);
+    }
+}
+```
+
+<Note>
+  The `@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)` annotation ensures that events are only published to RabbitMQ after the database transaction successfully commits, maintaining data consistency.
+</Note>
+
+## RabbitMQ Configuration
+
+The service configures the following RabbitMQ resources:
+
+```java
+public static final String QUEUE_SALE = "argos.sales.queue";
+public static final String QUEUE_PRODUCTS = "argos.products.mgmt.queue";
+public static final String EXCHANGE_NAME = "shop.exchange";
+public static final String RK_SALES = "shop.event.sold";
+public static final String RK_PRODUCTS = "shop.event.product.#";
+```
+
+### Queues and Bindings
+
+<CardGroup cols={2}>
+  <Card title="Sales Queue" icon="bag-shopping">
+    **Queue:** `argos.sales.queue`
+    
+    **Routing Key:** `shop.event.sold`
+    
+    Receives `ProductSoldInternalEvent` messages consumed by the Sentinel service
+  </Card>
+  
+  <Card title="Products Queue" icon="boxes-stacked">
+    **Queue:** `argos.products.mgmt.queue`
+    
+    **Routing Key:** `shop.event.product.#`
+    
+    Receives product lifecycle events (create, update, delete)
+  </Card>
+</CardGroup>
+
+## Event Schema
+
+### ProductSoldInternalEvent
+
+```java
+public record ProductSoldInternalEvent(
+    Long productID,
+    Integer quantity,
+    String ipAddress,
+    LocalDateTime timeStamp
+) {}
+```
+
+This event is published when a product is sold and contains:
+- `productID`: The ID of the product that was sold
+- `quantity`: Number of units purchased
+- `ipAddress`: Client IP address for DDoS detection
+- `timeStamp`: Timestamp of the sale
+
+## Database Configuration
+
+The service connects to PostgreSQL with the following configuration:
+
+```properties
+spring.datasource.url=jdbc:postgresql://db:5432/shop_db
+spring.datasource.username=user_shop
+spring.datasource.driver-class-name=org.postgresql.Driver
+spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect
+spring.jpa.hibernate.ddl-auto=update
+```
+
+## Error Handling
+
+The service implements custom exceptions for common error scenarios:
+
+<CardGroup cols={3}>
+  <Card title="ProductNotFoundException" icon="circle-exclamation">
+    Thrown when a product ID doesn't exist
+  </Card>
+  <Card title="NotSuficientStockException" icon="box-open">
+    Thrown when insufficient inventory is available
+  </Card>
+  <Card title="SecurityException" icon="shield-halved">
+    Thrown when a blacklisted IP attempts a purchase
+  </Card>
+</CardGroup>
+
+## Integration Points
+
+<Steps>
+  <Step title="PostgreSQL Database">
+    Stores product catalog and inventory data with ACID guarantees
+  </Step>
+  
+  <Step title="Redis Cache">
+    Checks IP blacklist maintained by the Sentinel service
+  </Step>
+  
+  <Step title="RabbitMQ">
+    Publishes events to the `shop.exchange` for consumption by Sentinel and other services
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Sentinel Service" icon="tower-observation" href="/services/sentinel">
+    Learn how Sentinel monitors traffic from Orders
+  </Card>
+  <Card title="Message Broker" icon="message" href="/configuration/rabbitmq">
+    Explore the RabbitMQ event infrastructure
+  </Card>
+</CardGroup>

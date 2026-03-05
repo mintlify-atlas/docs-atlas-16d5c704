@@ -1,0 +1,529 @@
+---
+title: 'Docker Compose Deployment'
+description: 'Complete guide to deploying Argos Mesh using Docker Compose'
+icon: 'docker'
+---
+
+## Overview
+
+Argos Mesh uses Docker Compose to orchestrate its complete microservices architecture. The stack includes three Spring Boot microservices, PostgreSQL database, RabbitMQ message broker, and Redis cache.
+
+<Note>
+  The docker-compose configuration is located in `/infra/docker-compose.yml` in the source repository.
+</Note>
+
+## Architecture Overview
+
+The Docker Compose stack deploys:
+
+- **Orders Service** (`shop_app`): Main shop application with REST API (port 8080)
+- **Sentinel Service** (`sentinel_app`): DDoS protection using Java 21 Virtual Threads
+- **Notify Service** (`notify_app`): Notification worker for security alerts
+- **PostgreSQL** (`shop_db`): Primary database (port 5432)
+- **RabbitMQ** (`message_broker`): Message queue with management UI (ports 5672, 15672)
+- **Redis** (`black_list`): Blacklist cache for suspicious IPs (port 6379)
+
+## Complete Docker Compose Configuration
+
+### Services Breakdown
+
+<Accordion title="PostgreSQL Database Service">
+
+```yaml
+db:
+  image: postgres:15-alpine
+  container_name: shop_db
+  restart: always
+  environment:
+    - POSTGRES_USER=user_shop
+    - POSTGRES_PASSWORD=secretPassword
+    - POSTGRES_DB=shop_db
+  volumes:
+    - postgres_data:/var/lib/postgresql/data
+  ports:
+    - "5432:5432"
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U user_shop -d shop_db"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+  networks:
+    - argos-network
+```
+
+**Key Configuration:**
+- Uses PostgreSQL 15 Alpine for minimal image size
+- Persistent volume `postgres_data` for data durability
+- Health check ensures database is ready before dependent services start
+- Database accessible on localhost:5432
+
+</Accordion>
+
+<Accordion title="Orders Service (Main Application)">
+
+```yaml
+app:
+  build:
+    context: ../orders
+    dockerfile: Dockerfile
+  container_name: shop_app
+  depends_on:
+    db:
+      condition: service_healthy
+  ports:
+    - "8080:8080"
+  environment:
+    SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/shop_db
+    SPRING_DATASOURCE_USERNAME: user_shop
+    SPRING_DATASOURCE_PASSWORD: secretPassword
+    SPRING_RABBITMQ_HOST: message_broker
+    SPRING_RABBITMQ_PORT: 5672
+    SPRING_RABBITMQ_USERNAME: admin
+    SPRING_RABBITMQ_PASSWORD: admin123
+    SPRING_DATA_REDIS_HOST: redis_db
+    SPRING_DATA_REDIS_PORT: 6379
+  restart: on-failure
+  networks:
+    - argos-network
+```
+
+**Key Configuration:**
+- Built from source using multi-stage Dockerfile
+- Waits for database health check before starting
+- REST API exposed on port 8080
+- Connects to PostgreSQL, RabbitMQ, and Redis
+
+</Accordion>
+
+<Accordion title="Sentinel Service (DDoS Protection)">
+
+```yaml
+sentinel:
+  build:
+    context: ../sentinel
+    dockerfile: Dockerfile
+  container_name: sentinel_app
+  depends_on:
+    redis_db:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+  environment:
+    - SPRING_RABBITMQ_HOST=message_broker
+    - SPRING_RABBITMQ_PORT=5672
+    - SPRING_RABBITMQ_USERNAME=admin
+    - SPRING_RABBITMQ_PASSWORD=admin123
+    - SPRING_DATA_REDIS_HOST=redis_db
+    - SPRING_DATA_REDIS_PORT=6379
+    - SPRING_THREADS_VIRTUAL_ENABLED=true
+  restart: on-failure
+  networks:
+    - argos-network
+```
+
+**Key Configuration:**
+- Uses Java 21 Virtual Threads for high concurrency
+- Monitors request patterns and detects suspicious IPs
+- Publishes alerts to RabbitMQ for notification service
+- Maintains blacklist in Redis for fast lookups
+
+</Accordion>
+
+<Accordion title="Notify Service (Alert Worker)">
+
+```yaml
+notify:
+  build:
+    context: ../notify
+    dockerfile: Dockerfile
+  container_name: notify_app
+  depends_on:
+    rabbitmq:
+      condition: service_healthy
+  environment:
+    - SPRING_RABBITMQ_HOST=message_broker
+    - SPRING_RABBITMQ_PORT=5672
+    - SPRING_RABBITMQ_USERNAME=admin
+    - SPRING_RABBITMQ_PASSWORD=admin123
+  restart: on-failure
+  networks:
+    - argos-network
+```
+
+**Key Configuration:**
+- Headless service (no exposed ports)
+- Consumes messages from RabbitMQ queues
+- Sends notifications for DDoS attacks and suspicious activity
+
+</Accordion>
+
+<Accordion title="RabbitMQ Message Broker">
+
+```yaml
+rabbitmq:
+  image: rabbitmq:3-management-alpine
+  container_name: message_broker
+  ports:
+    - "5672:5672"   # AMQP protocol
+    - "15672:15672" # Management UI
+  environment:
+    - RABBITMQ_DEFAULT_USER=admin
+    - RABBITMQ_DEFAULT_PASS=admin123
+  healthcheck:
+    test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+  networks:
+    - argos-network
+```
+
+**Key Configuration:**
+- Includes management plugin for web-based monitoring
+- Management UI accessible at http://localhost:15672
+- Login: `admin` / `admin123`
+- Health check ensures broker is ready for consumers
+
+</Accordion>
+
+<Accordion title="Redis Cache Service">
+
+```yaml
+redis_db:
+  image: redis:7.2-alpine
+  container_name: black_list
+  restart: always
+  ports:
+    - "6379:6379"
+  command: ["redis-server", "--appendonly", "yes"]
+  volumes:
+    - redis_data:/data
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+  networks:
+    - argos-network
+```
+
+**Key Configuration:**
+- Persistence enabled with append-only file (AOF)
+- Stores IP blacklist for rapid access
+- Persistent volume ensures blacklist survives restarts
+
+</Accordion>
+
+## Deployment Steps
+
+<Steps>
+  <Step title="Prerequisites">
+    Ensure you have the following installed:
+    - Docker Engine 20.10+
+    - Docker Compose 2.0+
+    
+    Verify installation:
+    ```bash
+    docker --version
+    docker compose version
+    ```
+  </Step>
+
+  <Step title="Clone Repository">
+    ```bash
+    git clone <repository-url>
+    cd argos-mesh
+    ```
+  </Step>
+
+  <Step title="Navigate to Infrastructure Directory">
+    ```bash
+    cd infra
+    ```
+  </Step>
+
+  <Step title="Start All Services">
+    Start the entire stack in detached mode:
+    ```bash
+    docker compose up -d
+    ```
+    
+    Or view logs in real-time:
+    ```bash
+    docker compose up
+    ```
+  </Step>
+
+  <Step title="Verify Services are Running">
+    Check service status:
+    ```bash
+    docker compose ps
+    ```
+    
+    Expected output shows all services healthy:
+    ```
+    NAME              IMAGE                            STATUS
+    shop_app          infra-app                        Up (healthy)
+    sentinel_app      infra-sentinel                   Up (healthy)
+    notify_app        infra-notify                     Up (healthy)
+    shop_db           postgres:15-alpine               Up (healthy)
+    message_broker    rabbitmq:3-management-alpine     Up (healthy)
+    black_list        redis:7.2-alpine                 Up (healthy)
+    ```
+  </Step>
+
+  <Step title="Access Services">
+    - **Orders API**: http://localhost:8080
+    - **RabbitMQ Management**: http://localhost:15672 (admin/admin123)
+    - **PostgreSQL**: localhost:5432 (user_shop/secretPassword)
+    - **Redis**: localhost:6379
+  </Step>
+</Steps>
+
+## Managing the Stack
+
+### Viewing Logs
+
+<CodeGroup>
+```bash All Services
+docker compose logs -f
+```
+
+```bash Specific Service
+# View orders service logs
+docker compose logs -f app
+
+# View sentinel logs
+docker compose logs -f sentinel
+
+# View notify logs
+docker compose logs -f notify
+```
+
+```bash Last 100 Lines
+docker compose logs --tail=100 app
+```
+</CodeGroup>
+
+### Restarting Services
+
+<CodeGroup>
+```bash Restart All
+docker compose restart
+```
+
+```bash Restart Single Service
+docker compose restart app
+```
+
+```bash Rebuild and Restart
+docker compose up -d --build app
+```
+</CodeGroup>
+
+### Stopping Services
+
+<CodeGroup>
+```bash Stop All Services
+docker compose stop
+```
+
+```bash Stop and Remove Containers
+docker compose down
+```
+
+```bash Remove Volumes Too
+# WARNING: This deletes all data
+docker compose down -v
+```
+</CodeGroup>
+
+## Environment Variables Reference
+
+### Database Configuration
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `POSTGRES_USER` | `user_shop` | PostgreSQL username |
+| `POSTGRES_PASSWORD` | `secretPassword` | PostgreSQL password (change in production!) |
+| `POSTGRES_DB` | `shop_db` | Database name |
+
+<Warning>
+  The default password `secretPassword` is for development only. Use strong passwords and secrets management in production.
+</Warning>
+
+### RabbitMQ Configuration
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `RABBITMQ_DEFAULT_USER` | `admin` | RabbitMQ admin username |
+| `RABBITMQ_DEFAULT_PASS` | `admin123` | RabbitMQ admin password |
+| `SPRING_RABBITMQ_HOST` | `message_broker` | Hostname for RabbitMQ |
+| `SPRING_RABBITMQ_PORT` | `5672` | AMQP protocol port |
+
+### Redis Configuration
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `SPRING_DATA_REDIS_HOST` | `redis_db` | Redis hostname |
+| `SPRING_DATA_REDIS_PORT` | `6379` | Redis port |
+
+## Networking
+
+All services communicate through the `argos-network` bridge network:
+
+```yaml
+networks:
+  argos-network:
+    driver: bridge
+```
+
+Services can reference each other by container name:
+- Database: `db` or `shop_db`
+- RabbitMQ: `message_broker`
+- Redis: `redis_db` or `black_list`
+
+## Persistent Volumes
+
+Two named volumes preserve data across container restarts:
+
+```yaml
+volumes:
+  postgres_data:  # Database tables and records
+  redis_data:     # IP blacklist and cache data
+```
+
+To inspect volumes:
+```bash
+docker volume ls
+docker volume inspect infra_postgres_data
+```
+
+## Health Checks
+
+All critical services have health checks configured:
+
+| Service | Health Check Command | Interval |
+|---------|---------------------|----------|
+| PostgreSQL | `pg_isready -U user_shop -d shop_db` | 10s |
+| RabbitMQ | `rabbitmq-diagnostics -q ping` | 10s |
+| Redis | `redis-cli ping` | 5s |
+
+Dependent services wait for health checks to pass before starting.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Services won't start">
+    1. Check if ports are already in use:
+    ```bash
+    lsof -i :8080
+    lsof -i :5432
+    lsof -i :15672
+    ```
+    
+    2. View service logs:
+    ```bash
+    docker compose logs
+    ```
+    
+    3. Ensure Docker has enough resources (memory, CPU)
+  </Accordion>
+
+  <Accordion title="Database connection errors">
+    1. Verify database is healthy:
+    ```bash
+    docker compose ps db
+    ```
+    
+    2. Check if database initialization completed:
+    ```bash
+    docker compose logs db
+    ```
+    
+    3. Test connection manually:
+    ```bash
+    docker compose exec db psql -U user_shop -d shop_db
+    ```
+  </Accordion>
+
+  <Accordion title="RabbitMQ connection failures">
+    1. Verify RabbitMQ is healthy:
+    ```bash
+    docker compose ps rabbitmq
+    ```
+    
+    2. Check management UI: http://localhost:15672
+    
+    3. View RabbitMQ logs:
+    ```bash
+    docker compose logs rabbitmq
+    ```
+  </Accordion>
+
+  <Accordion title="Build failures">
+    1. Clean Docker build cache:
+    ```bash
+    docker compose build --no-cache
+    ```
+    
+    2. Ensure source code is present in parent directories
+    
+    3. Check Dockerfile syntax in each service directory
+  </Accordion>
+
+  <Accordion title="Out of disk space">
+    Clean up unused Docker resources:
+    ```bash
+    docker system prune -a --volumes
+    ```
+    
+    <Warning>
+      This removes ALL unused containers, images, and volumes!
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+## Production Considerations
+
+<Warning>
+  This configuration is for development and testing. For production:
+</Warning>
+
+1. **Security**:
+   - Change all default passwords
+   - Use Docker secrets for sensitive data
+   - Enable TLS for external connections
+   - Don't expose database ports publicly
+
+2. **Resource Limits**:
+   ```yaml
+   deploy:
+     resources:
+       limits:
+         cpus: '1.0'
+         memory: 512M
+       reservations:
+         memory: 256M
+   ```
+
+3. **Monitoring**:
+   - Add health check endpoints to Spring Boot apps
+   - Integrate with Prometheus/Grafana
+   - Set up log aggregation (ELK stack)
+
+4. **Backup Strategy**:
+   - Regular PostgreSQL dumps
+   - Volume backups for Redis
+   - Test restore procedures
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Local Development Setup" icon="code" href="/operations/local-setup">
+    Set up individual services for development
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/products">
+    Explore the Orders API endpoints
+  </Card>
+</CardGroup>

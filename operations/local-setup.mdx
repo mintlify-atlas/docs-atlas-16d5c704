@@ -1,0 +1,743 @@
+---
+title: 'Local Development Setup'
+description: 'Guide for setting up Argos Mesh for local development'
+icon: 'laptop-code'
+---
+
+## Overview
+
+This guide walks through setting up Argos Mesh for local development. You'll learn how to run services individually, build from source, and configure your development environment.
+
+<Note>
+  For running the complete stack, see [Docker Compose Deployment](/operations/docker-compose).
+</Note>
+
+## Prerequisites
+
+### Required Software
+
+<Steps>
+  <Step title="Java Development Kit 21">
+    Argos Mesh uses Java 21 features including Virtual Threads.
+    
+    **Install on Linux/macOS:**
+    ```bash
+    # Using SDKMAN (recommended)
+    curl -s "https://get.sdkman.io" | bash
+    sdk install java 21-tem
+    ```
+    
+    **Verify installation:**
+    ```bash
+    java -version
+    # Should show: openjdk version "21"
+    ```
+  </Step>
+
+  <Step title="Apache Maven 3.9+">
+    Build tool for Spring Boot applications.
+    
+    **Install on Linux/macOS:**
+    ```bash
+    # Using SDKMAN
+    sdk install maven 3.9.6
+    
+    # Or using package manager
+    brew install maven  # macOS
+    sudo apt install maven  # Ubuntu/Debian
+    ```
+    
+    **Verify installation:**
+    ```bash
+    mvn -version
+    # Should show: Apache Maven 3.9.6
+    ```
+  </Step>
+
+  <Step title="Docker & Docker Compose">
+    Required for running PostgreSQL, RabbitMQ, and Redis locally.
+    
+    **Install Docker Desktop:**
+    - macOS/Windows: [Docker Desktop](https://www.docker.com/products/docker-desktop)
+    - Linux: [Docker Engine](https://docs.docker.com/engine/install/)
+    
+    **Verify installation:**
+    ```bash
+    docker --version
+    docker compose version
+    ```
+  </Step>
+
+  <Step title="Git">
+    ```bash
+    git --version
+    ```
+  </Step>
+</Steps>
+
+### Optional Tools
+
+- **IDE**: IntelliJ IDEA, VS Code with Java extensions, or Eclipse
+- **Database Client**: DBeaver, pgAdmin, or psql CLI
+- **API Testing**: Postman, Insomnia, or curl
+- **Redis Client**: RedisInsight or redis-cli
+
+## Project Structure
+
+```
+argos-mesh/
+├── orders/          # Main shop application (REST API)
+│   ├── src/
+│   ├── pom.xml
+│   └── Dockerfile
+├── sentinel/        # DDoS protection service
+│   ├── src/
+│   ├── pom.xml
+│   └── Dockerfile
+├── notify/          # Notification worker service
+│   ├── src/
+│   ├── pom.xml
+│   └── Dockerfile
+└── infra/           # Docker Compose configuration
+    └── docker-compose.yml
+```
+
+## Quick Start: Full Stack
+
+<Steps>
+  <Step title="Clone Repository">
+    ```bash
+    git clone <repository-url>
+    cd argos-mesh
+    ```
+  </Step>
+
+  <Step title="Start Infrastructure Services">
+    Start PostgreSQL, RabbitMQ, and Redis using Docker Compose:
+    
+    ```bash
+    cd infra
+    docker compose up -d db rabbitmq redis_db
+    ```
+    
+    Verify services are running:
+    ```bash
+    docker compose ps
+    ```
+  </Step>
+
+  <Step title="Build All Microservices">
+    Build each service from source:
+    
+    ```bash
+    # Build Orders service
+    cd ../orders
+    mvn clean package -DskipTests
+    
+    # Build Sentinel service
+    cd ../sentinel
+    mvn clean package -DskipTests
+    
+    # Build Notify service
+    cd ../notify
+    mvn clean package -DskipTests
+    ```
+  </Step>
+
+  <Step title="Run Services Locally">
+    Open three terminal windows and run each service:
+    
+    **Terminal 1 - Orders Service:**
+    ```bash
+    cd orders
+    java -jar target/orders-0.0.1.jar
+    ```
+    
+    **Terminal 2 - Sentinel Service:**
+    ```bash
+    cd sentinel
+    java -jar target/sentinel-0.0.1.jar
+    ```
+    
+    **Terminal 3 - Notify Service:**
+    ```bash
+    cd notify
+    java -jar target/notify-0.0.1.jar
+    ```
+  </Step>
+</Steps>
+
+## Service-by-Service Setup
+
+### Orders Service (Main Application)
+
+<Accordion title="Orders Service Configuration">
+
+**Technology Stack:**
+- Spring Boot 4.0.3
+- Spring Data JPA (PostgreSQL)
+- Spring Data Redis
+- Spring AMQP (RabbitMQ)
+- Spring Web MVC
+- MapStruct for DTO mapping
+- Lombok
+
+**Build Commands:**
+
+<CodeGroup>
+```bash Development Build
+cd orders
+mvn clean package
+```
+
+```bash Skip Tests
+mvn clean package -DskipTests
+```
+
+```bash Run Tests Only
+mvn test
+```
+</CodeGroup>
+
+**Run the Service:**
+
+```bash
+java -jar target/orders-0.0.1.jar
+```
+
+The Orders API will be available at: **http://localhost:8080**
+
+**Environment Variables:**
+
+You can override default configuration:
+
+```bash
+export SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/shop_db
+export SPRING_DATASOURCE_USERNAME=user_shop
+export SPRING_DATASOURCE_PASSWORD=secretPassword
+export SPRING_RABBITMQ_HOST=localhost
+export SPRING_RABBITMQ_PORT=5672
+export SPRING_RABBITMQ_USERNAME=admin
+export SPRING_RABBITMQ_PASSWORD=admin123
+export SPRING_DATA_REDIS_HOST=localhost
+export SPRING_DATA_REDIS_PORT=6379
+
+java -jar target/orders-0.0.1.jar
+```
+
+</Accordion>
+
+### Sentinel Service (DDoS Protection)
+
+<Accordion title="Sentinel Service Configuration">
+
+**Technology Stack:**
+- Spring Boot 4.0.3
+- Spring AMQP (RabbitMQ consumer/publisher)
+- Spring Data Redis (blacklist storage)
+- Java 21 Virtual Threads
+- Jackson for JSON serialization
+
+**Key Features:**
+- Monitors request patterns for DDoS attacks
+- Uses Redis to maintain IP blacklist
+- Publishes alerts to RabbitMQ
+- High concurrency with Virtual Threads
+
+**Build Commands:**
+
+```bash
+cd sentinel
+mvn clean package -DskipTests
+```
+
+**Run the Service:**
+
+```bash
+java -jar target/sentinel-0.0.1.jar
+```
+
+**Environment Variables:**
+
+```bash
+export SPRING_RABBITMQ_HOST=localhost
+export SPRING_RABBITMQ_PORT=5672
+export SPRING_RABBITMQ_USERNAME=admin
+export SPRING_RABBITMQ_PASSWORD=admin123
+export SPRING_DATA_REDIS_HOST=localhost
+export SPRING_DATA_REDIS_PORT=6379
+export SPRING_THREADS_VIRTUAL_ENABLED=true
+
+java -jar target/sentinel-0.0.1.jar
+```
+
+<Note>
+  Sentinel requires RabbitMQ and Redis to be running before it starts.
+</Note>
+
+</Accordion>
+
+### Notify Service (Alert Worker)
+
+<Accordion title="Notify Service Configuration">
+
+**Technology Stack:**
+- Spring Boot 4.0.3
+- Spring AMQP (RabbitMQ consumer)
+- Jackson for JSON deserialization
+
+**Key Features:**
+- Consumes alert messages from RabbitMQ
+- Sends notifications for security events
+- Headless worker service (no HTTP endpoints)
+
+**Build Commands:**
+
+```bash
+cd notify
+mvn clean package -DskipTests
+```
+
+**Run the Service:**
+
+```bash
+java -jar target/notify-0.0.1.jar
+```
+
+**Environment Variables:**
+
+```bash
+export SPRING_RABBITMQ_HOST=localhost
+export SPRING_RABBITMQ_PORT=5672
+export SPRING_RABBITMQ_USERNAME=admin
+export SPRING_RABBITMQ_PASSWORD=admin123
+
+java -jar target/notify-0.0.1.jar
+```
+
+</Accordion>
+
+## Infrastructure Services
+
+### PostgreSQL Database
+
+<Accordion title="PostgreSQL Setup">
+
+**Start PostgreSQL:**
+
+```bash
+cd infra
+docker compose up -d db
+```
+
+**Connection Details:**
+- **Host**: localhost
+- **Port**: 5432
+- **Database**: shop_db
+- **Username**: user_shop
+- **Password**: secretPassword
+
+**Connect using psql:**
+
+```bash
+docker compose exec db psql -U user_shop -d shop_db
+```
+
+**Common psql Commands:**
+
+```sql
+-- List all tables
+\dt
+
+-- Describe table structure
+\d table_name
+
+-- List all databases
+\l
+
+-- Quit
+\q
+```
+
+**JDBC Connection String:**
+
+```
+jdbc:postgresql://localhost:5432/shop_db
+```
+
+</Accordion>
+
+### RabbitMQ Message Broker
+
+<Accordion title="RabbitMQ Setup">
+
+**Start RabbitMQ:**
+
+```bash
+cd infra
+docker compose up -d rabbitmq
+```
+
+**Connection Details:**
+- **AMQP Port**: 5672
+- **Management UI**: http://localhost:15672
+- **Username**: admin
+- **Password**: admin123
+
+**Access Management UI:**
+
+1. Open browser to http://localhost:15672
+2. Login with `admin` / `admin123`
+3. View:
+   - Queues and message rates
+   - Connections from services
+   - Exchange bindings
+   - Message flow
+
+**Useful Management Commands:**
+
+```bash
+# List all queues
+docker compose exec rabbitmq rabbitmqctl list_queues
+
+# List connections
+docker compose exec rabbitmq rabbitmqctl list_connections
+
+# Purge a queue
+docker compose exec rabbitmq rabbitmqctl purge_queue queue_name
+```
+
+</Accordion>
+
+### Redis Cache
+
+<Accordion title="Redis Setup">
+
+**Start Redis:**
+
+```bash
+cd infra
+docker compose up -d redis_db
+```
+
+**Connection Details:**
+- **Host**: localhost
+- **Port**: 6379
+- **Password**: None (default)
+
+**Connect using redis-cli:**
+
+```bash
+docker compose exec redis_db redis-cli
+```
+
+**Common Redis Commands:**
+
+```bash
+# View all keys
+KEYS *
+
+# Get value of a key
+GET key_name
+
+# Check if key exists
+EXISTS key_name
+
+# View all blacklisted IPs (example)
+SMEMBERS blacklist
+
+# Get info about Redis
+INFO
+
+# Monitor commands in real-time
+MONITOR
+```
+
+**Persistence:**
+
+Redis is configured with AOF (Append-Only File) persistence:
+
+```bash
+command: ["redis-server", "--appendonly", "yes"]
+```
+
+Data persists in the `redis_data` Docker volume.
+
+</Accordion>
+
+## Development Workflow
+
+### Using IDE (IntelliJ IDEA)
+
+<Steps>
+  <Step title="Import Project">
+    - Open IntelliJ IDEA
+    - File → Open → Select `argos-mesh` directory
+    - IntelliJ will detect Maven projects automatically
+  </Step>
+
+  <Step title="Configure JDK">
+    - File → Project Structure → Project
+    - Set SDK to Java 21
+    - Set Language Level to 21
+  </Step>
+
+  <Step title="Run Configuration">
+    Create run configurations for each service:
+    
+    - Run → Edit Configurations
+    - Add new Spring Boot configuration
+    - Main class: Auto-detected
+    - Environment variables: Set as needed
+  </Step>
+
+  <Step title="Enable Lombok">
+    - Settings → Plugins → Install Lombok plugin
+    - Settings → Build → Compiler → Annotation Processors
+    - Enable annotation processing
+  </Step>
+</Steps>
+
+### Hot Reload with Spring DevTools
+
+Add Spring DevTools to `pom.xml` for automatic restarts:
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-devtools</artifactId>
+    <scope>runtime</scope>
+    <optional>true</optional>
+</dependency>
+```
+
+Reload automatically when you save changes in your IDE.
+
+### Testing
+
+<CodeGroup>
+```bash Run All Tests
+mvn test
+```
+
+```bash Run Specific Test Class
+mvn test -Dtest=OrderServiceTest
+```
+
+```bash Run Tests with Coverage
+mvn test jacoco:report
+```
+
+```bash Skip Tests During Build
+mvn clean package -DskipTests
+```
+</CodeGroup>
+
+## Accessing Services
+
+### Service Ports
+
+| Service | Port | URL |
+|---------|------|-----|
+| Orders API | 8080 | http://localhost:8080 |
+| PostgreSQL | 5432 | jdbc:postgresql://localhost:5432/shop_db |
+| RabbitMQ AMQP | 5672 | amqp://localhost:5672 |
+| RabbitMQ Management | 15672 | http://localhost:15672 |
+| Redis | 6379 | redis://localhost:6379 |
+
+### Testing the Orders API
+
+<CodeGroup>
+```bash Health Check
+curl http://localhost:8080/actuator/health
+```
+
+```bash Create Order (Example)
+curl -X POST http://localhost:8080/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customerName": "John Doe",
+    "items": [
+      {"product": "Widget", "quantity": 2}
+    ]
+  }'
+```
+
+```bash Get Orders
+curl http://localhost:8080/api/orders
+```
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Port already in use">
+    **Error:** `Port 8080 is already in use`
+    
+    **Solution:**
+    
+    Find and kill the process:
+    ```bash
+    # Find process using port
+    lsof -i :8080
+    
+    # Kill process
+    kill -9 <PID>
+    ```
+    
+    Or change the port:
+    ```bash
+    java -jar target/orders-0.0.1.jar --server.port=8081
+    ```
+  </Accordion>
+
+  <Accordion title="Maven build fails">
+    **Error:** `Failed to execute goal`
+    
+    **Solutions:**
+    
+    1. Clean Maven cache:
+    ```bash
+    mvn clean install -U
+    ```
+    
+    2. Delete `.m2/repository` and rebuild:
+    ```bash
+    rm -rf ~/.m2/repository
+    mvn clean package
+    ```
+    
+    3. Ensure Java 21 is active:
+    ```bash
+    java -version
+    ```
+  </Accordion>
+
+  <Accordion title="Database connection refused">
+    **Error:** `Connection refused: localhost:5432`
+    
+    **Solutions:**
+    
+    1. Verify PostgreSQL is running:
+    ```bash
+    docker compose ps db
+    ```
+    
+    2. Check database logs:
+    ```bash
+    docker compose logs db
+    ```
+    
+    3. Test connection:
+    ```bash
+    docker compose exec db pg_isready -U user_shop
+    ```
+  </Accordion>
+
+  <Accordion title="RabbitMQ connection timeout">
+    **Error:** `Timeout waiting for RabbitMQ connection`
+    
+    **Solutions:**
+    
+    1. Verify RabbitMQ is running:
+    ```bash
+    docker compose ps rabbitmq
+    ```
+    
+    2. Check health:
+    ```bash
+    docker compose exec rabbitmq rabbitmq-diagnostics ping
+    ```
+    
+    3. Access management UI to verify: http://localhost:15672
+  </Accordion>
+
+  <Accordion title="Redis connection failed">
+    **Error:** `Unable to connect to Redis`
+    
+    **Solutions:**
+    
+    1. Verify Redis is running:
+    ```bash
+    docker compose ps redis_db
+    ```
+    
+    2. Test connection:
+    ```bash
+    docker compose exec redis_db redis-cli ping
+    # Should return: PONG
+    ```
+  </Accordion>
+
+  <Accordion title="Java version mismatch">
+    **Error:** `class file has wrong version`
+    
+    **Solution:**
+    
+    Ensure Java 21 is active:
+    ```bash
+    java -version
+    javac -version
+    
+    # If using SDKMAN
+    sdk use java 21-tem
+    
+    # Set JAVA_HOME
+    export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+    ```
+  </Accordion>
+
+  <Accordion title="Out of memory errors">
+    **Error:** `Java heap space`
+    
+    **Solution:**
+    
+    Increase heap size:
+    ```bash
+    java -Xmx512m -Xms256m -jar target/orders-0.0.1.jar
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Development Tips
+
+<CardGroup cols={2}>
+  <Card title="Use Profiles" icon="sliders">
+    Create different `application-{profile}.properties` files for dev/test/prod configurations.
+  </Card>
+  
+  <Card title="Enable Debug Logging" icon="bug">
+    Add to `application.properties`:
+    ```
+    logging.level.com.argos=DEBUG
+    ```
+  </Card>
+  
+  <Card title="Use Docker Compose Profiles" icon="docker">
+    Start only infrastructure:
+    ```bash
+    docker compose up -d db rabbitmq redis_db
+    ```
+  </Card>
+  
+  <Card title="Monitor with Actuator" icon="heart-pulse">
+    Add Spring Boot Actuator for metrics and health checks at `/actuator`.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Docker Compose Deployment" icon="docker" href="/operations/docker-compose">
+    Deploy the complete stack with one command
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/products">
+    Explore the REST API endpoints
+  </Card>
+  <Card title="Architecture Overview" icon="sitemap" href="/architecture">
+    Understand the system architecture
+  </Card>
+  <Card title="Security Features" icon="shield" href="/security/ddos-protection">
+    Learn about DDoS protection
+  </Card>
+</CardGroup>

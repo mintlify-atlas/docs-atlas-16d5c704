@@ -1,0 +1,286 @@
+---
+title: 'Environment Variables'
+description: 'Configure Argos Mesh microservices using environment variables'
+icon: 'gear'
+---
+
+## Overview
+
+Argos Mesh uses environment variables to configure all microservices. This approach provides flexibility for different deployment environments (development, staging, production) without modifying application code.
+
+## Orders Service
+
+The Orders service is the main application that handles product management and sales transactions.
+
+### Database Configuration
+
+<ParamField path="SPRING_DATASOURCE_URL" type="string" required>
+  PostgreSQL database connection URL
+  
+  **Default:** `jdbc:postgresql://db:5432/shop_db`
+  
+  **Example:**
+  ```bash
+  SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/shop_db
+  ```
+</ParamField>
+
+<ParamField path="SPRING_DATASOURCE_USERNAME" type="string" required>
+  Database authentication username
+  
+  **Default:** `user_shop`
+</ParamField>
+
+<ParamField path="SPRING_DATASOURCE_PASSWORD" type="string" required>
+  Database authentication password
+  
+  **Default:** `secretPassword`
+  
+  <Warning>
+    Change this default password in production environments!
+  </Warning>
+</ParamField>
+
+### RabbitMQ Configuration
+
+<ParamField path="SPRING_RABBITMQ_HOST" type="string" required>
+  RabbitMQ message broker hostname
+  
+  **Default:** `message_broker`
+  
+  **Example:**
+  ```bash
+  SPRING_RABBITMQ_HOST=localhost
+  ```
+</ParamField>
+
+<ParamField path="SPRING_RABBITMQ_PORT" type="number" required>
+  RabbitMQ AMQP port
+  
+  **Default:** `5672`
+</ParamField>
+
+<ParamField path="SPRING_RABBITMQ_USERNAME" type="string" required>
+  RabbitMQ authentication username
+  
+  **Default:** `admin`
+</ParamField>
+
+<ParamField path="SPRING_RABBITMQ_PASSWORD" type="string" required>
+  RabbitMQ authentication password
+  
+  **Default:** `admin123`
+  
+  <Warning>
+    Change this default password in production environments!
+  </Warning>
+</ParamField>
+
+### Redis Configuration
+
+<ParamField path="SPRING_DATA_REDIS_HOST" type="string" required>
+  Redis server hostname
+  
+  **Default:** `redis_db`
+</ParamField>
+
+<ParamField path="SPRING_DATA_REDIS_PORT" type="number" required>
+  Redis server port
+  
+  **Default:** `6379`
+</ParamField>
+
+## Sentinel Service
+
+The Sentinel service monitors traffic, detects suspicious patterns, and manages IP blacklisting.
+
+### RabbitMQ Configuration
+
+<ParamField path="SPRING_RABBITMQ_HOST" type="string" required>
+  RabbitMQ message broker hostname
+  
+  **Default:** `message_broker`
+</ParamField>
+
+<ParamField path="SPRING_RABBITMQ_PORT" type="number" required>
+  RabbitMQ AMQP port
+  
+  **Default:** `5672`
+</ParamField>
+
+<ParamField path="SPRING_RABBITMQ_USERNAME" type="string" required>
+  RabbitMQ authentication username
+  
+  **Default:** `admin`
+</ParamField>
+
+<ParamField path="SPRING_RABBITMQ_PASSWORD" type="string" required>
+  RabbitMQ authentication password
+  
+  **Default:** `admin123`
+</ParamField>
+
+### Redis Configuration
+
+<ParamField path="SPRING_DATA_REDIS_HOST" type="string" required>
+  Redis server hostname for IP blacklisting and rate limiting
+  
+  **Default:** `redis_db`
+</ParamField>
+
+<ParamField path="SPRING_DATA_REDIS_PORT" type="number" required>
+  Redis server port
+  
+  **Default:** `6379`
+</ParamField>
+
+### Virtual Threads
+
+<ParamField path="SPRING_THREADS_VIRTUAL_ENABLED" type="boolean">
+  Enable Java virtual threads for improved concurrency
+  
+  **Default:** `true`
+  
+  <Note>
+    Virtual threads improve performance when handling many concurrent connections. Requires Java 21+.
+  </Note>
+</ParamField>
+
+## Notify Service
+
+The Notify service handles alert notifications sent through RabbitMQ.
+
+### RabbitMQ Configuration
+
+<ParamField path="SPRING_RABBITMQ_HOST" type="string" required>
+  RabbitMQ message broker hostname
+  
+  **Default:** `message_broker`
+</ParamField>
+
+<ParamField path="SPRING_RABBITMQ_PORT" type="number" required>
+  RabbitMQ AMQP port
+  
+  **Default:** `5672`
+</ParamField>
+
+<ParamField path="SPRING_RABBITMQ_USERNAME" type="string" required>
+  RabbitMQ authentication username
+  
+  **Default:** `admin`
+</ParamField>
+
+<ParamField path="SPRING_RABBITMQ_PASSWORD" type="string" required>
+  RabbitMQ authentication password
+  
+  **Default:** `admin123`
+</ParamField>
+
+## Docker Compose Configuration
+
+When running Argos Mesh with Docker Compose, environment variables are defined in the `docker-compose.yml` file:
+
+<CodeGroup>
+```yaml docker-compose.yml
+services:
+  app:
+    build:
+      context: ../orders
+      dockerfile: Dockerfile
+    container_name: shop_app
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/shop_db
+      SPRING_DATASOURCE_USERNAME: user_shop
+      SPRING_DATASOURCE_PASSWORD: secretPassword
+      SPRING_RABBITMQ_HOST: message_broker
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: admin
+      SPRING_RABBITMQ_PASSWORD: admin123
+      SPRING_DATA_REDIS_HOST: redis_db
+      SPRING_DATA_REDIS_PORT: 6379
+    restart: on-failure
+    networks:
+      - argos-network
+
+  sentinel:
+    build:
+      context: ../sentinel
+      dockerfile: Dockerfile
+    container_name: sentinel_app
+    depends_on:
+      redis_db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - SPRING_RABBITMQ_HOST=message_broker
+      - SPRING_RABBITMQ_PORT=5672
+      - SPRING_RABBITMQ_USERNAME=admin
+      - SPRING_RABBITMQ_PASSWORD=admin123
+      - SPRING_DATA_REDIS_HOST=redis_db
+      - SPRING_DATA_REDIS_PORT=6379
+      - SPRING_THREADS_VIRTUAL_ENABLED=true
+    restart: on-failure
+    networks:
+      - argos-network
+```
+</CodeGroup>
+
+## Configuration Best Practices
+
+<AccordionGroup>
+  <Accordion title="Security Considerations">
+    - Never commit credentials to version control
+    - Use environment-specific `.env` files
+    - Change all default passwords in production
+    - Use secrets management tools (AWS Secrets Manager, HashiCorp Vault, etc.)
+    - Rotate credentials regularly
+  </Accordion>
+
+  <Accordion title="Service Dependencies">
+    - Ensure database is healthy before starting the Orders service
+    - Sentinel requires both Redis and RabbitMQ to be available
+    - Use Docker health checks to manage startup order
+    - Configure appropriate restart policies (`on-failure`, `always`)
+  </Accordion>
+
+  <Accordion title="Development vs Production">
+    - Use `localhost` hostnames for local development
+    - Use service names for Docker Compose (e.g., `message_broker`, `redis_db`)
+    - Use fully qualified domain names in production
+    - Consider using external managed services (Amazon RDS, Amazon MQ, Amazon ElastiCache)
+  </Accordion>
+</AccordionGroup>
+
+## Environment File Example
+
+Create a `.env` file for local development:
+
+```bash .env
+# Database
+SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/shop_db
+SPRING_DATASOURCE_USERNAME=user_shop
+SPRING_DATASOURCE_PASSWORD=your_secure_password
+
+# RabbitMQ
+SPRING_RABBITMQ_HOST=localhost
+SPRING_RABBITMQ_PORT=5672
+SPRING_RABBITMQ_USERNAME=admin
+SPRING_RABBITMQ_PASSWORD=your_secure_password
+
+# Redis
+SPRING_DATA_REDIS_HOST=localhost
+SPRING_DATA_REDIS_PORT=6379
+
+# Performance
+SPRING_THREADS_VIRTUAL_ENABLED=true
+```
+
+<Note>
+  Reference this file in your Docker Compose with `env_file: .env` or load it in your IDE configuration.
+</Note>

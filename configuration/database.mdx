@@ -1,0 +1,537 @@
+---
+title: 'Database Configuration'
+description: 'Configure PostgreSQL database connection, schema, and JPA settings'
+icon: 'table'
+---
+
+## Overview
+
+Argos Mesh uses PostgreSQL as the primary relational database for the Orders service. The database stores product inventory, pricing, and stock information.
+
+## PostgreSQL Configuration
+
+### Docker Setup
+
+The database runs as a PostgreSQL 15 container:
+
+```yaml docker-compose.yml
+db:
+  image: postgres:15-alpine
+  container_name: shop_db
+  restart: always
+  environment:
+    - POSTGRES_USER=user_shop
+    - POSTGRES_PASSWORD=secretPassword
+    - POSTGRES_DB=shop_db
+  volumes:
+    - postgres_data:/var/lib/postgresql/data
+  ports:
+    - "5432:5432"
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U user_shop -d shop_db"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+  networks:
+    - argos-network
+
+volumes:
+  postgres_data:
+```
+
+### Environment Variables
+
+<ParamField path="POSTGRES_USER" type="string" required>
+  Database superuser username
+  
+  **Default:** `user_shop`
+  
+  **Docker:** Set via environment variable
+</ParamField>
+
+<ParamField path="POSTGRES_PASSWORD" type="string" required>
+  Database superuser password
+  
+  **Default:** `secretPassword`
+  
+  <Warning>
+    This is a test password only! Change it in production.
+  </Warning>
+</ParamField>
+
+<ParamField path="POSTGRES_DB" type="string" required>
+  Initial database name
+  
+  **Default:** `shop_db`
+</ParamField>
+
+## Spring Datasource Configuration
+
+### Connection Settings
+
+<ParamField path="spring.datasource.url" type="string" required>
+  JDBC connection URL
+  
+  **Default:** `jdbc:postgresql://db:5432/shop_db`
+  
+  **Format:** `jdbc:postgresql://{host}:{port}/{database}`
+  
+  **Local Development:** `jdbc:postgresql://localhost:5432/shop_db`
+</ParamField>
+
+<ParamField path="spring.datasource.username" type="string" required>
+  Database authentication username
+  
+  **Default:** `user_shop`
+</ParamField>
+
+<ParamField path="spring.datasource.password" type="string" required>
+  Database authentication password
+  
+  **Default:** `secretPassword`
+</ParamField>
+
+<ParamField path="spring.datasource.driver-class-name" type="string" required>
+  JDBC driver class
+  
+  **Default:** `org.postgresql.Driver`
+</ParamField>
+
+### Application Properties
+
+<CodeGroup>
+```properties orders/application.properties
+spring.application.name=argos-orders
+
+# ==========================
+# DATASOURCE (PostgreSQL)
+# ==========================
+spring.datasource.url=jdbc:postgresql://db:5432/shop_db
+spring.datasource.username=user_shop
+spring.datasource.password=secretPassword
+spring.datasource.driver-class-name=org.postgresql.Driver
+
+# PostgreSQL dialect
+spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect
+
+# Schema management
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.defer-datasource-initialization=true
+spring.sql.init.mode=always
+```
+
+```yaml application.yml (alternative)
+spring:
+  application:
+    name: argos-orders
+  
+  datasource:
+    url: jdbc:postgresql://db:5432/shop_db
+    username: user_shop
+    password: secretPassword
+    driver-class-name: org.postgresql.Driver
+  
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: update
+    defer-datasource-initialization: true
+  
+  sql:
+    init:
+      mode: always
+```
+</CodeGroup>
+
+## JPA/Hibernate Configuration
+
+### Schema Management
+
+<ParamField path="spring.jpa.hibernate.ddl-auto" type="string">
+  Hibernate schema generation strategy
+  
+  **Default:** `update`
+  
+  **Options:**
+  - `none` - No schema management
+  - `validate` - Validate schema, make no changes
+  - `update` - Update schema if needed
+  - `create` - Create schema, destroying existing data
+  - `create-drop` - Create schema, drop on shutdown
+  
+  <Warning>
+    Use `validate` or `none` in production. Never use `create` or `create-drop`!
+  </Warning>
+</ParamField>
+
+<ParamField path="spring.jpa.database-platform" type="string">
+  Hibernate SQL dialect
+  
+  **Default:** `org.hibernate.dialect.PostgreSQLDialect`
+  
+  **Purpose:** Enables PostgreSQL-specific optimizations and SQL features
+</ParamField>
+
+<ParamField path="spring.jpa.defer-datasource-initialization" type="boolean">
+  Defer initialization until after entity scanning
+  
+  **Default:** `true`
+  
+  **Purpose:** Ensures Hibernate creates tables before data.sql runs
+</ParamField>
+
+<ParamField path="spring.sql.init.mode" type="string">
+  SQL initialization mode
+  
+  **Default:** `always`
+  
+  **Options:**
+  - `always` - Always execute data.sql
+  - `embedded` - Only for embedded databases
+  - `never` - Disable SQL initialization
+</ParamField>
+
+## Database Schema
+
+### Products Table
+
+The core table for product inventory management:
+
+```sql
+CREATE TABLE products (
+    product_id BIGSERIAL PRIMARY KEY,
+    product_name VARCHAR(255) NOT NULL,
+    product_price DECIMAL(19,2) NOT NULL CHECK (product_price > 0),
+    product_stock INTEGER NOT NULL CHECK (product_stock >= 0)
+);
+```
+
+### Entity Mapping
+
+```java Product.java
+@Entity
+@Table(name = "products")
+@Getter @Setter
+@NoArgsConstructor @AllArgsConstructor
+public class Product {
+    
+    @Id
+    @Column(name = "product_id")
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long productID;
+    
+    @NotNull
+    @NotBlank
+    @Column(name = "product_name", nullable = false)
+    private String productName;
+    
+    @NotNull
+    @Positive
+    @Column(name = "product_price", nullable = false)
+    private BigDecimal productPrice;
+    
+    @NotNull
+    @PositiveOrZero
+    @Column(name = "product_stock")
+    private Integer productStock;
+}
+```
+
+### Column Descriptions
+
+<ParamField path="product_id" type="BIGSERIAL">
+  Primary key with auto-increment
+  
+  **Strategy:** `IDENTITY` (PostgreSQL SERIAL)
+  
+  **Java Type:** `Long`
+</ParamField>
+
+<ParamField path="product_name" type="VARCHAR(255)">
+  Product display name
+  
+  **Constraints:** NOT NULL, NOT BLANK
+  
+  **Example:** `"Remera Oversize Black"`
+</ParamField>
+
+<ParamField path="product_price" type="DECIMAL(19,2)">
+  Product price with 2 decimal places
+  
+  **Constraints:** NOT NULL, must be positive
+  
+  **Java Type:** `BigDecimal`
+  
+  **Example:** `15900.00`
+</ParamField>
+
+<ParamField path="product_stock" type="INTEGER">
+  Available inventory quantity
+  
+  **Constraints:** NOT NULL, must be >= 0
+  
+  **Java Type:** `Integer`
+  
+  **Example:** `100`
+</ParamField>
+
+## Initial Data Loading
+
+The system loads seed data from `data.sql` on startup:
+
+```sql data.sql
+INSERT INTO products (product_name, product_price, product_stock) VALUES
+('Remera Oversize Black', 15900.00, 100),
+('Jean Slim Fit Blue', 35000.50, 20),
+('Hoodie Vintage Grey', 28000.00, 15),
+('Tote Bag Eco', 5200.00, 100),
+('Campera de Cuero Pro', 85000.00, 1),
+('Gorra Snapback Urban', 9500.00, 30),
+('Pantalón Cargo Olive', 32000.00, 12),
+('Remera Basic White', 12000.00, 200),
+('Short Deportivo Dry', 18500.00, 45),
+('Zapatillas Street v1', 55000.00, 8),
+('Medias Pack x3', 4500.00, 150),
+('Bermuda Chino Beige', 22000.00, 25),
+('Camisa Formal Slim', 29500.00, 18),
+('Cinturón Cuero Marrón', 8900.00, 40),
+('Mochila Tech 20L', 42000.00, 10);
+```
+
+<Note>
+  **Idempotency:** This script runs on every startup. In production, use Flyway or Liquibase for versioned migrations.
+</Note>
+
+## Connection Pool Configuration
+
+Spring Boot uses HikariCP as the default connection pool (no configuration needed for basic usage).
+
+### Advanced Tuning (Optional)
+
+```properties application.properties
+# Maximum pool size
+spring.datasource.hikari.maximum-pool-size=10
+
+# Minimum idle connections
+spring.datasource.hikari.minimum-idle=5
+
+# Connection timeout (milliseconds)
+spring.datasource.hikari.connection-timeout=30000
+
+# Idle timeout (milliseconds)
+spring.datasource.hikari.idle-timeout=600000
+
+# Maximum lifetime (milliseconds)
+spring.datasource.hikari.max-lifetime=1800000
+```
+
+<Accordion title="Connection Pool Best Practices">
+  **Maximum Pool Size:**
+  - Formula: `(CPU cores * 2) + effective spindle count`
+  - For most applications: 10-20 connections is sufficient
+  - More connections != better performance
+  
+  **Minimum Idle:**
+  - Keep 5-10 connections ready for burst traffic
+  - Reduces latency on sudden load increases
+  
+  **Connection Timeout:**
+  - 30 seconds is reasonable for most applications
+  - Increase if database is slow to respond
+  
+  **Idle Timeout:**
+  - 10 minutes (600000ms) allows reuse during quiet periods
+  - Prevents holding unnecessary connections
+</Accordion>
+
+## Health Checks
+
+### Docker Health Check
+
+PostgreSQL container uses `pg_isready` for health verification:
+
+```yaml docker-compose.yml
+healthcheck:
+  test: ["CMD-SHELL", "pg_isready -U user_shop -d shop_db"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+```
+
+### Application Health Check
+
+Spring Boot Actuator automatically exposes database health:
+
+```bash
+curl http://localhost:8080/actuator/health
+```
+
+Response:
+```json
+{
+  "status": "UP",
+  "components": {
+    "db": {
+      "status": "UP",
+      "details": {
+        "database": "PostgreSQL",
+        "validationQuery": "isValid()"
+      }
+    }
+  }
+}
+```
+
+## Database Operations
+
+### Connect to Database
+
+<CodeGroup>
+```bash Using Docker
+# Connect via psql
+docker exec -it shop_db psql -U user_shop -d shop_db
+```
+
+```bash Local Connection
+# If PostgreSQL is exposed on port 5432
+psql -h localhost -U user_shop -d shop_db
+```
+</CodeGroup>
+
+### Common SQL Queries
+
+<CodeGroup>
+```sql View All Products
+SELECT * FROM products ORDER BY product_id;
+```
+
+```sql Check Stock Levels
+SELECT product_name, product_stock 
+FROM products 
+WHERE product_stock < 10
+ORDER BY product_stock ASC;
+```
+
+```sql Update Product Stock
+UPDATE products 
+SET product_stock = product_stock - 1 
+WHERE product_id = 1 AND product_stock > 0;
+```
+
+```sql View Table Schema
+\d products
+```
+</CodeGroup>
+
+## Backup and Recovery
+
+### Data Persistence
+
+PostgreSQL data is stored in a Docker volume:
+
+```yaml docker-compose.yml
+volumes:
+  - postgres_data:/var/lib/postgresql/data
+```
+
+**Persistence Guarantees:**
+- Data survives container restarts
+- Data survives `docker-compose down`
+- Data is lost only with `docker-compose down -v` (volume removal)
+
+### Backup Commands
+
+<CodeGroup>
+```bash Full Database Backup
+# Backup to SQL file
+docker exec shop_db pg_dump -U user_shop shop_db > backup.sql
+
+# Compressed backup
+docker exec shop_db pg_dump -U user_shop shop_db | gzip > backup.sql.gz
+```
+
+```bash Restore from Backup
+# Restore SQL file
+docker exec -i shop_db psql -U user_shop -d shop_db < backup.sql
+
+# Restore compressed backup
+gunzip -c backup.sql.gz | docker exec -i shop_db psql -U user_shop -d shop_db
+```
+
+```bash Table-Level Backup
+# Backup single table
+docker exec shop_db pg_dump -U user_shop -d shop_db -t products > products_backup.sql
+```
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection Refused">
+    **Symptoms:** Application can't connect to database
+    
+    **Solutions:**
+    - Verify PostgreSQL is running: `docker ps | grep shop_db`
+    - Check logs: `docker logs shop_db`
+    - Verify health check: `docker inspect shop_db | grep Health`
+    - Ensure database is ready before app starts (use `depends_on` with `condition: service_healthy`)
+  </Accordion>
+
+  <Accordion title="Schema Not Updated">
+    **Symptoms:** New entity fields don't appear in database
+    
+    **Solutions:**
+    - Verify `spring.jpa.hibernate.ddl-auto=update`
+    - Check for Hibernate errors in logs
+    - Manually create columns if needed
+    - Consider using Flyway/Liquibase for production
+  </Accordion>
+
+  <Accordion title="Data Initialization Fails">
+    **Symptoms:** `data.sql` doesn't execute or fails
+    
+    **Solutions:**
+    - Ensure `spring.sql.init.mode=always`
+    - Set `spring.jpa.defer-datasource-initialization=true`
+    - Check for SQL syntax errors
+    - Verify table exists before INSERT
+  </Accordion>
+
+  <Accordion title="Connection Pool Exhausted">
+    **Symptoms:** `HikariPool - Connection is not available`
+    
+    **Solutions:**
+    - Increase `maximum-pool-size`
+    - Check for connection leaks (unclosed connections)
+    - Reduce `connection-timeout`
+    - Monitor active connections: `SELECT * FROM pg_stat_activity;`
+  </Accordion>
+</AccordionGroup>
+
+## Production Recommendations
+
+<CardGroup cols={2}>
+  <Card title="Use Managed Databases" icon="cloud">
+    Consider Amazon RDS, Google Cloud SQL, or Azure Database for PostgreSQL
+  </Card>
+  
+  <Card title="Enable SSL/TLS" icon="lock">
+    Configure `ssl=true` in JDBC URL and provide certificates
+  </Card>
+  
+  <Card title="Implement Migrations" icon="code-branch">
+    Use Flyway or Liquibase instead of `ddl-auto=update`
+  </Card>
+  
+  <Card title="Monitor Performance" icon="chart-line">
+    Use pg_stat_statements and connection pool metrics
+  </Card>
+  
+  <Card title="Configure Backups" icon="floppy-disk">
+    Automated daily backups with point-in-time recovery
+  </Card>
+  
+  <Card title="Optimize Queries" icon="gauge-high">
+    Add indexes, use EXPLAIN ANALYZE, monitor slow queries
+  </Card>
+</CardGroup>

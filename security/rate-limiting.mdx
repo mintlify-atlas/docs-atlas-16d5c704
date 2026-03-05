@@ -1,0 +1,240 @@
+---
+title: 'Rate Limiting'
+description: 'Protect your system from traffic abuse with sliding window rate limiting'
+icon: 'gauge-high'
+---
+
+## Overview
+
+Argos Mesh implements a sophisticated rate limiting mechanism through the **TrafficAnalyzer** component in the Sentinel service. This prevents abuse by limiting the number of requests from a single IP address within a time window.
+
+<Info>
+The rate limiter uses Redis for distributed state management, making it scalable across multiple Sentinel instances.
+</Info>
+
+## Rate Limiting Algorithm
+
+The system employs a **sliding window counter** algorithm with the following parameters:
+
+- **Limit**: 50 requests per IP address
+- **Window**: 10 seconds
+- **Action**: Automatic IP ban for 10 minutes when threshold exceeded
+
+<Steps>
+
+### Step 1: Request Arrives
+
+When a `ProductSoldInternalEvent` is received from RabbitMQ, the Sentinel service extracts the IP address and begins analysis.
+
+### Step 2: Check Blacklist
+
+Before processing, the system checks if the IP is already banned:
+
+```java
+if (redisService.isBanned(ip)) return true;
+```
+
+### Step 3: Increment Counter
+
+The traffic counter for the IP is atomically incremented in Redis:
+
+```java
+String key = RATE_PREFIX + ip;  // "rate:ip:192.168.1.100"
+Long currentCount = redisTemplate.opsForValue().increment(key);
+```
+
+### Step 4: Set Expiration
+
+On the first request (count = 1), set the key to expire after 10 seconds:
+
+```java
+if (currentCount != null && currentCount == 1) {
+    redisTemplate.expire(key, Duration.ofSeconds(WINDOW_SECONDS));
+}
+```
+
+### Step 5: Enforce Limit
+
+If the count exceeds 50, ban the IP immediately:
+
+```java
+if (currentCount != null && currentCount > LIMIT) {
+    redisService.banIp(ip, 10);
+    return true;
+}
+```
+
+</Steps>
+
+## Implementation Details
+
+### TrafficAnalyzer Component
+
+The core rate limiting logic resides in `TrafficAnalyzer.java`:
+
+```java
+@Component
+public class TrafficAnalyzer {
+    private final RedisService redisService;
+    private final StringRedisTemplate redisTemplate;
+
+    private static final int LIMIT = 50; 
+    private static final int WINDOW_SECONDS = 10;
+    private static final String RATE_PREFIX = "rate:ip:";
+
+    public boolean processAndCheckLimit(String ip) {
+        if (redisService.isBanned(ip)) return true;
+
+        String key = RATE_PREFIX + ip;
+        
+        Long currentCount = redisTemplate.opsForValue().increment(key);
+
+        if (currentCount != null && currentCount == 1) {
+            redisTemplate.expire(key, Duration.ofSeconds(WINDOW_SECONDS));
+        }
+
+        if (currentCount != null && currentCount > LIMIT) {
+            redisService.banIp(ip, 10);
+            return true;
+        }
+
+        return false;
+    }
+}
+```
+
+**Source**: `sentinel/src/main/java/com/argos/sentinel/service/TrafficAnalyzer.java`
+
+### Redis Key Structure
+
+The rate limiter uses a simple key-value pattern:
+
+| Key Pattern | Example | Value | TTL |
+|-------------|---------|-------|-----|
+| `rate:ip:<address>` | `rate:ip:192.168.1.100` | Counter (Integer) | 10 seconds |
+
+<Note>
+The atomic `increment` operation ensures thread-safety even with concurrent requests from the same IP.
+</Note>
+
+## Integration with Event Processing
+
+The rate limiter is invoked by the `SalesListener` component for every product sale event:
+
+```java
+@RabbitListener(queues = "argos.sales.queue")
+public void processSalesEvents(ProductSoldInternalEvent data) {
+    String ip = data.ipAddress();
+
+    if (redisService.isBanned(ip)) {
+        return;
+    }
+
+    if (analyzer.processAndCheckLimit(ip)) {
+        AlertInternalEvent event = new AlertInternalEvent(
+            "Suspicious behavior", 
+            ip, 
+            "CRITICAL", 
+            LocalDateTime.now()
+        );            
+        rabbitTemplate.convertAndSend(
+            RabbitMQConfig.ALERT_EXCHANGE,
+            "argos.alert.security",
+            event
+        );
+    } else {
+        System.out.println("[ Sentinel🛡️ ] Normal traffic of the IP: " + ip);
+    }
+}
+```
+
+**Source**: `sentinel/src/main/java/com/argos/sentinel/service/SalesListener.java:26-43`
+
+## Behavior Examples
+
+<CardGroup cols={2}>
+
+<Card title="Normal Traffic" icon="circle-check">
+**Scenario**: User makes 30 requests in 10 seconds
+
+- Requests 1-30: Processed normally
+- Counter resets after 10 seconds
+- No ban triggered
+</Card>
+
+<Card title="Abusive Traffic" icon="circle-xmark">
+**Scenario**: Bot makes 51 requests in 5 seconds
+
+- Requests 1-50: Processed
+- Request 51: Limit exceeded
+- IP banned for 10 minutes
+- Alert sent to security queue
+</Card>
+
+</CardGroup>
+
+## Configuration Parameters
+
+You can customize the rate limiting behavior by modifying these constants:
+
+```java
+private static final int LIMIT = 50;  // Max requests per window
+private static final int WINDOW_SECONDS = 10;  // Time window in seconds
+```
+
+<Warning>
+Changing these values requires recompiling and redeploying the Sentinel service.
+</Warning>
+
+## Performance Considerations
+
+### Why Redis?
+
+<CardGroup cols={2}>
+
+<Card title="Atomic Operations" icon="atom">
+Redis `INCR` is atomic and thread-safe, preventing race conditions in high-concurrency scenarios.
+</Card>
+
+<Card title="Distributed State" icon="network-wired">
+Multiple Sentinel instances can share the same Redis, ensuring consistent rate limiting across the cluster.
+</Card>
+
+<Card title="Auto-Expiration" icon="clock">
+Redis TTL automatically cleans up old counters without manual intervention.
+</Card>
+
+<Card title="High Performance" icon="bolt">
+In-memory operations provide sub-millisecond latency for counter increments.
+</Card>
+
+</CardGroup>
+
+## Monitoring Rate Limiting
+
+To monitor rate limiting activity in Redis:
+
+```bash
+# View all active rate limit counters
+redis-cli KEYS "rate:ip:*"
+
+# Check counter for specific IP
+redis-cli GET "rate:ip:192.168.1.100"
+
+# Check TTL remaining
+redis-cli TTL "rate:ip:192.168.1.100"
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="IP Blocking" icon="shield-halved" href="/security/ip-blocking">
+Learn how banned IPs are managed in the blacklist
+</Card>
+
+<Card title="DDoS Protection" icon="shield" href="/security/ddos-protection">
+Understand the complete DDoS mitigation strategy
+</Card>
+
+</CardGroup>

@@ -1,0 +1,446 @@
+---
+title: 'Redis Configuration'
+description: 'Configure Redis for rate limiting, IP blacklisting, and caching'
+icon: 'database'
+---
+
+## Overview
+
+Argos Mesh uses Redis as an in-memory data store for high-performance rate limiting and IP blacklisting. The Sentinel service leverages Redis to track request patterns and block malicious IPs in real-time.
+
+## Connection Configuration
+
+### Basic Connection Settings
+
+<ParamField path="spring.data.redis.host" type="string" required>
+  Redis server hostname
+  
+  **Default:** `redis_db` (Docker service name)
+  
+  **Production:** Use FQDN or IP address of Redis cluster
+</ParamField>
+
+<ParamField path="spring.data.redis.port" type="number" required>
+  Redis server port
+  
+  **Default:** `6379`
+</ParamField>
+
+<ParamField path="spring.data.redis.password" type="string">
+  Redis authentication password (optional)
+  
+  **Default:** Not set in development
+  
+  <Warning>
+    Always use authentication in production environments!
+  </Warning>
+</ParamField>
+
+### Application Properties Example
+
+<CodeGroup>
+```properties orders/application.properties
+spring.data.redis.host=redis_db
+spring.data.redis.port=6379
+```
+
+```properties sentinel/application.properties
+spring.data.redis.host=redis_db
+spring.data.redis.port=6379
+```
+</CodeGroup>
+
+## Docker Configuration
+
+Redis runs as a Docker container with persistence enabled:
+
+```yaml docker-compose.yml
+redis_db:
+  image: redis:7.2-alpine
+  container_name: black_list
+  restart: always
+  ports:
+    - "6379:6379"
+  command: ["redis-server", "--appendonly", "yes"]
+  volumes:
+    - redis_data:/data
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+  networks:
+    - argos-network
+
+volumes:
+  redis_data:
+```
+
+<Note>
+  **Append-Only File (AOF):** The `--appendonly yes` flag enables persistence. Redis logs every write operation, allowing data recovery after restart.
+</Note>
+
+## Rate Limiting Implementation
+
+The Sentinel service implements a sliding window rate limiter using Redis counters.
+
+### Rate Limiter Configuration
+
+<ParamField path="LIMIT" type="number">
+  Maximum requests allowed per time window
+  
+  **Default:** `50`
+  
+  **Location:** `TrafficAnalyzer.java:13`
+  
+  <Note>
+    Adjust this value based on your expected traffic patterns and capacity.
+  </Note>
+</ParamField>
+
+<ParamField path="WINDOW_SECONDS" type="number">
+  Time window for rate limiting (in seconds)
+  
+  **Default:** `10`
+  
+  **Location:** `TrafficAnalyzer.java:14`
+</ParamField>
+
+<ParamField path="RATE_PREFIX" type="string">
+  Redis key prefix for rate limit counters
+  
+  **Default:** `rate:ip:`
+  
+  **Key Pattern:** `rate:ip:{ip_address}`
+  
+  **Example:** `rate:ip:192.168.1.100`
+</ParamField>
+
+### Rate Limiting Algorithm
+
+The system tracks requests per IP address using Redis INCREMENT operations:
+
+```java TrafficAnalyzer.java
+@Component
+public class TrafficAnalyzer {
+
+    private final RedisService redisService;
+    private final StringRedisTemplate redisTemplate;
+
+    private static final int LIMIT = 50; 
+    private static final int WINDOW_SECONDS = 10;
+    private static final String RATE_PREFIX = "rate:ip:";
+
+    public boolean processAndCheckLimit(String ip) {
+        // Check if IP is already banned
+        if (redisService.isBanned(ip)) return true;
+
+        String key = RATE_PREFIX + ip;
+        
+        // Increment counter for this IP
+        Long currentCount = redisTemplate.opsForValue().increment(key);
+
+        // Set TTL on first request
+        if (currentCount != null && currentCount == 1) {
+            redisTemplate.expire(key, Duration.ofSeconds(WINDOW_SECONDS));
+        }
+
+        // Ban IP if limit exceeded
+        if (currentCount != null && currentCount > LIMIT) {
+            redisService.banIp(ip, 10);
+            return true;
+        }
+
+        return false;
+    }
+}
+```
+
+### How It Works
+
+<Steps>
+  <Step title="First Request">
+    When an IP makes its first request, Redis creates a counter key (`rate:ip:192.168.1.100`) and sets it to `1` with a 10-second TTL.
+  </Step>
+  
+  <Step title="Subsequent Requests">
+    Each additional request increments the counter. The TTL remains unchanged (sliding window).
+  </Step>
+  
+  <Step title="Limit Exceeded">
+    If the counter exceeds 50, the IP is immediately banned for 10 minutes.
+  </Step>
+  
+  <Step title="Window Reset">
+    After 10 seconds, the key expires and the counter resets to 0.
+  </Step>
+</Steps>
+
+<Accordion title="Why This Approach?">
+  **Advantages:**
+  - **O(1) complexity:** INCREMENT is atomic and very fast
+  - **No cleanup needed:** Keys automatically expire via TTL
+  - **Distributed:** Works across multiple Sentinel instances
+  - **Simple:** Easy to understand and maintain
+  
+  **Trade-offs:**
+  - Fixed window behavior (not true sliding window)
+  - Potential burst at window boundaries
+  - Consider using more sophisticated algorithms (token bucket, sliding log) for stricter control
+</Accordion>
+
+## IP Blacklist Implementation
+
+The Sentinel service maintains a dynamic IP blacklist with automatic expiration.
+
+### Blacklist Configuration
+
+<ParamField path="BLACKLIST_PREFIX" type="string">
+  Redis key prefix for blacklisted IPs
+  
+  **Default:** `blacklist:ip:`
+  
+  **Key Pattern:** `blacklist:ip:{ip_address}`
+  
+  **Example:** `blacklist:ip:192.168.1.100`
+</ParamField>
+
+<ParamField path="durationMinutes" type="number">
+  Ban duration in minutes
+  
+  **Default:** `10` minutes
+  
+  **Configurable:** Can be adjusted per ban event
+</ParamField>
+
+### Blacklist Service
+
+```java RedisService.java
+@Service
+public class RedisService {
+    private final StringRedisTemplate redisTemplate;
+    private static final String BLACKLIST_PREFIX = "blacklist:ip:";
+
+    public RedisService(StringRedisTemplate redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    // Ban an IP address for specified duration
+    public void banIp(String ipAddress, long durationMinutes) {
+        redisTemplate.opsForValue().set(
+            BLACKLIST_PREFIX + ipAddress,
+            "BANNED",
+            Duration.ofMinutes(durationMinutes)
+        );
+    }
+
+    // Check if an IP is currently banned
+    public boolean isBanned(String ipAddress) {
+        return Boolean.TRUE.equals(
+            redisTemplate.hasKey(BLACKLIST_PREFIX + ipAddress)
+        ); 
+    }
+}
+```
+
+### Ban Workflow
+
+<Steps>
+  <Step title="Detection">
+    `TrafficAnalyzer` detects that an IP exceeded the rate limit (>50 requests in 10 seconds).
+  </Step>
+  
+  <Step title="Blacklist">
+    The IP is added to Redis with key `blacklist:ip:192.168.1.100` and value `"BANNED"`.
+  </Step>
+  
+  <Step title="TTL Set">
+    Redis sets a 10-minute TTL on the key. The ban expires automatically.
+  </Step>
+  
+  <Step title="Enforcement">
+    All subsequent requests from this IP are rejected immediately by checking `isBanned()`.
+  </Step>
+  
+  <Step title="Automatic Unban">
+    After 10 minutes, Redis deletes the key and the IP can make requests again.
+  </Step>
+</Steps>
+
+## Redis Key Patterns
+
+### Key Naming Convention
+
+| Key Pattern | Purpose | TTL | Value |
+|-------------|---------|-----|-------|
+| `rate:ip:{ip}` | Rate limit counter | 10 seconds | Integer (request count) |
+| `blacklist:ip:{ip}` | IP ban flag | 10 minutes | String (`"BANNED"`) |
+
+### Key Expiration Strategy
+
+<CodeGroup>
+```bash Rate Limit Key
+# Key automatically expires after window
+KEY: rate:ip:192.168.1.100
+VALUE: 45
+TTL: 7 seconds remaining
+```
+
+```bash Blacklist Key
+# Key automatically expires after ban duration
+KEY: blacklist:ip:192.168.1.100
+VALUE: "BANNED"
+TTL: 8 minutes 32 seconds remaining
+```
+</CodeGroup>
+
+<Note>
+  **Automatic Cleanup:** Redis handles all key expiration automatically. No manual cleanup required.
+</Note>
+
+## Monitoring Redis
+
+### Using Redis CLI
+
+Connect to the Redis container:
+
+```bash
+docker exec -it black_list redis-cli
+```
+
+### Useful Commands
+
+<CodeGroup>
+```bash View All Keys
+# List all rate limit keys
+KEYS rate:ip:*
+
+# List all blacklisted IPs
+KEYS blacklist:ip:*
+```
+
+```bash Inspect Specific Key
+# Get counter value
+GET rate:ip:192.168.1.100
+
+# Check ban status
+GET blacklist:ip:192.168.1.100
+
+# Check TTL (seconds remaining)
+TTL rate:ip:192.168.1.100
+TTL blacklist:ip:192.168.1.100
+```
+
+```bash Manual Operations
+# Manually ban an IP for 10 minutes
+SETEX blacklist:ip:192.168.1.100 600 "BANNED"
+
+# Remove ban early
+DEL blacklist:ip:192.168.1.100
+
+# Reset rate limit counter
+DEL rate:ip:192.168.1.100
+```
+</CodeGroup>
+
+## Performance Considerations
+
+<AccordionGroup>
+  <Accordion title="Memory Usage">
+    **Key Size:** Each IP address entry uses approximately 50-100 bytes
+    
+    **Estimated Usage:**
+    - 10,000 active IPs: ~1 MB
+    - 100,000 active IPs: ~10 MB
+    - 1,000,000 active IPs: ~100 MB
+    
+    Redis's in-memory nature makes this extremely fast, even with millions of keys.
+  </Accordion>
+
+  <Accordion title="Operation Complexity">
+    **INCREMENT:** O(1) - Constant time
+    
+    **SET with TTL:** O(1) - Constant time
+    
+    **HASKEY:** O(1) - Constant time
+    
+    All rate limiting and blacklist operations are extremely fast.
+  </Accordion>
+
+  <Accordion title="Persistence Trade-offs">
+    **AOF (Append-Only File):** Enabled in docker-compose
+    
+    **Pros:**
+    - Data survives Redis restarts
+    - Blacklists persist across deployments
+    
+    **Cons:**
+    - Slight performance overhead
+    - Disk I/O required
+    
+    **Alternative:** Use RDB snapshots for better write performance
+  </Accordion>
+
+  <Accordion title="Scaling Redis">
+    For high-traffic production deployments:
+    
+    - Use **Redis Cluster** for horizontal scaling
+    - Use **Redis Sentinel** for high availability
+    - Consider **Amazon ElastiCache** for managed Redis
+    - Implement connection pooling (Lettuce handles this automatically)
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection Refused">
+    **Symptoms:** Services can't connect to Redis
+    
+    **Solutions:**
+    - Verify Redis container is running: `docker ps`
+    - Check health: `docker logs black_list`
+    - Test connection: `docker exec black_list redis-cli ping`
+    - Verify network connectivity between services
+  </Accordion>
+
+  <Accordion title="Keys Not Expiring">
+    **Symptoms:** Blacklisted IPs never unban
+    
+    **Solutions:**
+    - Check TTL: `redis-cli TTL blacklist:ip:192.168.1.100`
+    - Verify `expire()` is called after `increment()`
+    - Check Redis memory policy: `redis-cli CONFIG GET maxmemory-policy`
+    - Ensure Redis has sufficient memory
+  </Accordion>
+
+  <Accordion title="High Memory Usage">
+    **Symptoms:** Redis consuming excessive memory
+    
+    **Solutions:**
+    - Monitor key count: `redis-cli DBSIZE`
+    - Check for keys without TTL: `redis-cli KEYS * | xargs redis-cli TTL`
+    - Implement key eviction policy
+    - Reduce rate limit window or ban duration
+  </Accordion>
+</AccordionGroup>
+
+## Production Recommendations
+
+<CardGroup cols={2}>
+  <Card title="Enable Authentication" icon="lock">
+    Set `requirepass` in redis.conf or use `--requirepass` flag
+  </Card>
+  
+  <Card title="Configure Persistence" icon="floppy-disk">
+    Choose between AOF (durability) or RDB (performance)
+  </Card>
+  
+  <Card title="Set Memory Limits" icon="memory">
+    Configure `maxmemory` and eviction policy
+  </Card>
+  
+  <Card title="Use Connection Pooling" icon="arrows-rotate">
+    Spring Data Redis uses Lettuce with built-in pooling
+  </Card>
+</CardGroup>
